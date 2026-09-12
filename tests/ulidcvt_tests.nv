@@ -1,0 +1,196 @@
+// ulidcvt_tests.nv — the UUID bridge, and the six bits it costs.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: ulid-nv.<module>.<fn>`.
+//
+// THE ASSERTION THIS FILE EXISTS FOR is that the two conversions are
+// NOT the same function: one is lossless and one is not, and the one
+// that is not says so before it is called.  A store that kept both
+// forms of the same record and assumed they round-trip would be keeping
+// two different identifiers and would discover it at a join.
+
+use std.test
+use std.bytes
+use ulid
+use ulidcvt
+use ulidgen
+use ulidseq
+
+@test
+fn test_the_raw_conversion_is_the_identity_on_the_bits() [io]
+    let u = ulid.of_parts(1469918176385, 0xBEEF, 0x0123456789ABCDEF)
+
+    test.case("sixteen bytes, the same ones to_bytes gives")
+    test.assert(bytes.len(ulidcvt.to_uuid_bytes(u)) == 16)
+
+    test.case("and it round-trips exactly")
+    match ulidcvt.of_uuid_bytes(ulidcvt.to_uuid_bytes(u))
+        Some(v) => test.assert(ulid.eq(u, v))
+        None    => test.assert(false)
+
+    test.case("for the two boundary values too")
+    match ulidcvt.of_uuid_bytes(ulidcvt.to_uuid_bytes(ulid.max()))
+        Some(v) => test.assert(ulid.eq(ulid.max(), v))
+        None    => test.assert(false)
+
+    test.case("a wrong length is not sixteen bytes and is refused")
+    match ulidcvt.of_uuid_bytes(bytes.zeros(17))
+        Some(_) => test.assert(false)
+        None    => test.assert(true)
+
+@test
+fn test_a_raw_ulid_is_not_a_conforming_uuid_of_any_version() [io]
+    // This is the trap the module exists to name.  The bytes are
+    // accepted by every UUID type and the version they report is
+    // whatever the entropy drew.
+    let u = ulid.of_parts(1469918176385, 0xBEEF, 0x0123456789ABCDEF)
+
+    test.case("the version nibble is entropy, not 7")
+    test.assert(ulidcvt.uuid_version(ulidcvt.to_uuid_bytes(u)) != 7)
+
+    test.case("so its timestamp is not something a UUID reader should trust")
+    test.assert(ulidcvt.timestamp_is_meaningful(ulidcvt.to_uuid_bytes(u)) == false)
+
+@test
+fn test_the_v7_conversion_stamps_the_six_bits_and_says_it_did() [io]
+    let u = ulid.of_parts(1469918176385, 0xBEEF, 0x0123456789ABCDEF)
+    let v7 = ulidcvt.to_uuidv7_bytes(u)
+
+    test.case("the version nibble is 7")
+    test.assert(ulidcvt.uuid_version(v7) == 7)
+
+    test.case("so a UUID reader may trust the timestamp")
+    test.assert(ulidcvt.timestamp_is_meaningful(v7))
+
+    test.case("and the timestamp survives")
+    match ulidcvt.of_uuidv7_bytes(v7)
+        Ok(back) => test.assert(ulid.timestamp_ms(back) == 1469918176385)
+        Err(_)   => test.assert(false)
+
+    test.case("but the IDENTITY does not — six bits were overwritten")
+    match ulidcvt.of_uuidv7_bytes(v7)
+        Ok(back) => test.assert(ulid.eq(back, u) == false)
+        Err(_)   => test.assert(false)
+
+    test.case("and is_lossless said so beforehand")
+    test.assert(ulidcvt.is_lossless(u) == false)
+
+@test
+fn test_one_ulid_in_sixty_four_survives_the_v7_stamp_unchanged() [io]
+    // The predicate is arithmetic, not a guess: a migration can count
+    // how many of its identifiers are unaffected.
+    test.case("the nil ULID's six bits are zero, so it is NOT lossless")
+    test.assert(ulidcvt.is_lossless(ulid.nil()) == false)
+
+    test.case("a ULID whose six bits already hold 7 and binary 10 is")
+    let ready = ulid.of_halves(0x0192F1B2C3D47000, 0x8000000000000001)
+    test.assert(ulidcvt.is_lossless(ready))
+
+    test.case("and converting it changes nothing")
+    match ulidcvt.of_uuidv7_bytes(ulidcvt.to_uuidv7_bytes(ready))
+        Ok(back) => test.assert(ulid.eq(back, ready))
+        Err(_)   => test.assert(false)
+
+@test
+fn test_a_uuid_of_the_wrong_version_is_refused_by_the_strict_form() [io]
+    // A v4 converted here would answer a ULID whose timestamp is 48
+    // bits of noise, sorted somewhere in the year 5000 or 1974.
+    let raw = ulidcvt.to_uuid_bytes(ulid.nil())
+
+    test.case("version 0 is not version 7")
+    match ulidcvt.of_uuidv7_bytes(raw)
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
+
+    test.case("but the lossless form takes it, because every 128 bits are a ULID")
+    match ulidcvt.of_uuid_bytes(raw)
+        Some(_) => test.assert(true)
+        None    => test.assert(false)
+
+    test.case("and a wrong length is refused by both")
+    match ulidcvt.of_uuidv7_bytes(bytes.zeros(8))
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
+
+@test
+fn test_the_hyphenated_text_form() [io]
+    test.case("thirty-six characters, lower-case hex")
+    test.assert(ulidcvt.to_uuid_text(ulid.nil())
+                == "00000000-0000-0000-0000-000000000000")
+
+    test.case("the all-ones value")
+    test.assert(ulidcvt.to_uuid_text(ulid.max())
+                == "ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    test.case("and it parses back")
+    match ulidcvt.of_uuid_text("00000000-0000-0000-0000-000000000000")
+        Ok(u)  => test.assert(ulid.is_nil(u))
+        Err(_) => test.assert(false)
+
+    test.case("unhyphenated too, because plenty of systems store it that way")
+    match ulidcvt.of_uuid_text("ffffffffffffffffffffffffffffffff")
+        Ok(u)  => test.assert(ulid.eq(u, ulid.max()))
+        Err(_) => test.assert(false)
+
+    test.case("upper case too")
+    match ulidcvt.of_uuid_text("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")
+        Ok(u)  => test.assert(ulid.eq(u, ulid.max()))
+        Err(_) => test.assert(false)
+
+    test.case("and something that is not hexadecimal is refused")
+    match ulidcvt.of_uuid_text("gggggggg-gggg-gggg-gggg-gggggggggggg")
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
+
+@test
+fn test_the_generator_reads_the_clock_and_the_entropy_and_nothing_else() [io, time, rand]
+    // The package's entire host surface, in one test.  Everything else
+    // in ulid-nv is [] arithmetic, and the manifest names this module
+    // in host_modules so the embedded probe is built without it.
+    test.case("a minted ULID carries a plausible millisecond")
+    match ulidgen.new()
+        Err(_) => test.assert(false)
+        Ok(u)  => test.assert(ulid.timestamp_ms(u) > 1700000000000)
+
+    test.case("the clock this package reads is published on its own")
+    test.assert(ulidgen.now_ms() > 1700000000000)
+
+    test.case("and so is the entropy draw")
+    let (hi, lo) = ulidgen.draw_entropy()
+    test.assert(hi >= 0)
+
+@test
+fn test_a_batch_sorts_in_the_order_it_was_issued() [io, time, rand]
+    // What the sequence is for: a thousand rows from one clock read,
+    // each one above the last.
+    match ulidgen.batch(ulidseq.empty(), 4)
+        Err(_)      => test.assert(false)
+        Ok((s, us)) =>
+            test.case("four identifiers")
+            test.assert(us.len() == 4)
+
+            test.case("each above the one before it")
+            test.assert(ulid.cmp(us[0], us[1]) == 0 - 1)
+            test.assert(ulid.cmp(us[1], us[2]) == 0 - 1)
+            test.assert(ulid.cmp(us[2], us[3]) == 0 - 1)
+
+            test.case("and the sequence remembers the last")
+            test.assert(ulid.eq(ulidseq.last(s), us[3]))
+
+@test
+fn test_the_generator_convenience_forms() [io, time, rand]
+    test.case("new_with takes the caller's entropy and the machine's clock")
+    match ulidgen.new_with(0xBEEF, 7)
+        Ok(u)  => test.assert(ulid.random_lo64(u) == 7)
+        Err(_) => test.assert(false)
+
+    test.case("next_in is ulidseq.next with both arguments filled in")
+    match ulidgen.next_in(ulidseq.empty())
+        Ok((s, u)) => test.assert(ulidseq.issued_ms(s) == ulid.timestamp_ms(u))
+        Err(_)     => test.assert(false)
+
+    test.case("and next_in_relaxed carries on through a clock that went backwards")
+    let ahead = ulidseq.resuming(ulid.of_parts(ulid.max_timestamp_ms(), 0, 0))
+    match ulidgen.next_in_relaxed(ahead)
+        Ok((s, u)) => test.assert(ulid.timestamp_ms(u) == ulid.max_timestamp_ms())
+        Err(_)     => test.assert(false)

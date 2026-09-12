@@ -1,0 +1,149 @@
+// embedded_probe.nv — the package's device claim, as a program that
+// either builds for a Cortex-M or does not.
+//
+// `scripts/shard_audit.sh` copies this and the package's `core` modules
+// into a package of their own and runs
+//
+//   novo build --target=nrf52-qemu src/probe.nv
+//
+// which produces a real Cortex-M4 ELF or fails.  `ulidgen` is left out
+// by the manifest's `host_modules`, which is the whole point of the
+// split rather than a convenience here: one host-only function anywhere
+// in a compilation unit is an undefined symbol at embedded link time
+// whether or not the firmware ever calls it.
+//
+// WHAT IS BEING ASSERTED.  That the 128-bit layout, the comparison and
+// the text form's per-character arithmetic lower onto a 32-bit core —
+// which is not a question a host test asks, because every one of them
+// is 64-bit shifts and masks that become EABI helper calls that either
+// exist in the embedded runtime or do not.  And that `Ulid` itself,
+// which is a BOXED struct rather than a `@value` one, is representable
+// there: it has to be boxed, because every parse and every monotonic
+// step returns it inside a `Result`, an optional or a tuple, and SPEC
+// § 14.5 keeps a `@value` struct out of all three.
+//
+// WHAT IS NOT HERE, AND WHY.  `ulidtext.encode`, `ulid.to_bytes`,
+// `ulidtext.parse` and everything in `ulidcvt`.  They speak `Str` or
+// `Bytes`, the embedded runtime defines no `novo_bytes_*` symbol and no
+// `novo_str_byte_at`, and they carry `@tier(app)` for that reason so a
+// device build prunes them.
+//
+// So on a device a ULID can be built from a real-time clock's
+// millisecond and a hardware entropy source's bits (as `Int`
+// arguments), held, compared, stepped monotonically, and written out
+// one byte or one character at a time — which is the whole of what a
+// logging sensor does with one — and cannot be parsed out of a string.
+// The parsing is the host's job.
+
+use std.str
+use ulid
+use ulidtext
+use ulidseq
+
+// Every answer this probe checks, folded into one number so a single
+// comparison decides the run.  A firmware image has one line of
+// output; making it depend on all of them is what stops a passing run
+// from meaning "the first assertion held".
+@tier(rt)
+fn score() -> Int
+    var n = 0
+
+    // The constants, as integer algebra.
+    if ulid.byte_len() == 16 and ulidtext.text_len() == 26
+        n = n + 1
+    if ulid.timestamp_bits() == 48 and ulid.random_bits() == 80
+        n = n + 1
+    if ulid.max_timestamp_ms() == 281474976710655
+        n = n + 1
+    if ulid.timestamp_fits(1700000000000) and not ulid.timestamp_fits(0 - 1)
+        n = n + 1
+    if ulidtext.timestamp_len() == 10
+        n = n + 1
+
+    // Construction and the accessors: 48-bit and 80-bit fields read
+    // out of two 64-bit halves on a 32-bit core.
+    let u = ulid.of_parts(1700000000000, 0xBEEF, 0x0123456789ABCDEF)
+    if ulid.timestamp_ms(u) == 1700000000000
+        n = n + 1
+    if ulid.random_hi16(u) == 0xBEEF and ulid.random_lo64(u) == 0x0123456789ABCDEF
+        n = n + 1
+    if ulid.eq(ulid.of_halves(ulid.hi(u), ulid.lo(u)), u)
+        n = n + 1
+    if ulid.is_nil(ulid.nil()) and not ulid.is_nil(u)
+        n = n + 1
+    if ulid.timestamp_ms(ulid.with_timestamp(u, 1)) == 1
+        n = n + 1
+
+    // The unsigned comparison — the one an ordinary `<` gets backwards
+    // whenever the high half's top bit is set, which `max()` has.
+    if ulid.cmp(ulid.nil(), ulid.max()) == 0 - 1
+        n = n + 1
+    if ulid.cmp(ulid.max(), ulid.nil()) == 1
+        n = n + 1
+    if ulid.cmp(u, u) == 0
+        n = n + 1
+
+    // The range bounds a scan is written with.
+    if ulid.cmp(ulid.floor_of(1700000000000), u) == 0 - 1
+        n = n + 1
+    if ulid.cmp(ulid.ceiling_of(1700000000000), u) == 1
+        n = n + 1
+
+    // The binary output path: a shift and a mask, sixteen times, with
+    // no buffer and no allocator.
+    if ulid.byte_at(ulid.max(), 0) == 255 and ulid.byte_at(ulid.max(), 15) == 255
+        n = n + 1
+    if ulid.byte_at(ulid.nil(), 7) == 0
+        n = n + 1
+
+    // The text output path, the same idea one character at a time.
+    // `0` is byte 48 and `Z` is byte 90.
+    if ulidtext.char_at(ulid.nil(), 0) == 48
+        n = n + 1
+    if ulidtext.char_at(ulid.max(), 25) == 90
+        n = n + 1
+    if ulidtext.digit_byte(0) == 48 and ulidtext.digit_byte(31) == 90
+        n = n + 1
+    if ulidtext.digit_value(48) == 0 and ulidtext.digit_value(90) == 31
+        n = n + 1
+    // Crockford's ambiguity rules, which a device reading a code off a
+    // DIP switch or a keypad needs as much as a host does.
+    if ulidtext.digit_value(73) == 1 and ulidtext.digit_value(79) == 0
+        n = n + 1
+    // `U` is excluded on purpose and is not an alias for anything.
+    if ulidtext.digit_value(85) == 0 - 1
+        n = n + 1
+
+    // The monotonic step: eighty bits incremented across the boundary
+    // between the two halves, which is where a 32-bit core earns its
+    // carry.
+    let s0 = ulidseq.empty()
+    if ulidseq.is_empty(s0) and ulidseq.issued_ms(s0) == 0 - 1
+        n = n + 1
+    let s1 = ulidseq.resuming(ulid.of_parts(1700000000000, 0, 0xFFFFFFFFFFFFFFFF))
+    if ulidseq.issued_ms(s1) == 1700000000000
+        n = n + 1
+    if ulid.eq(ulidseq.last(s1), ulid.of_parts(1700000000000, 0, 0xFFFFFFFFFFFFFFFF))
+        n = n + 1
+    let (rem_hi, rem_lo) = ulidseq.remaining_in_ms(s1)
+    if rem_hi == 0xFFFF and rem_lo == 0
+        n = n + 1
+
+    n
+
+@tier(rt)
+fn main() [hw, time]
+    bsp.board.init()
+    // 27 is the number of checks in `score`.  The count is printed on
+    // a failure rather than only compared, so a device that disagrees
+    // with the host says HOW MANY it lost and a bisect has somewhere
+    // to start.
+    let n = score()
+    if n == 27
+        hal.uart.write("PASS: ulid-embedded\n")
+    else
+        hal.uart.write("FAIL: ulid-embedded score=")
+        hal.uart.write(str.from_int(n))
+        hal.uart.write("\n")
+    loop
+        core.rt.sleep_ms(1000)

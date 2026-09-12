@@ -1,0 +1,422 @@
+// ulid.nv — the value: 128 bits as two integers, and every accessor a
+// shift and a mask.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// THE LAYOUT, MOST SIGNIFICANT BIT FIRST:
+//
+//     ┌───────────────────────────┬──────────────────────────────┐
+//     │  48 bits  unix epoch ms   │       80 bits  randomness    │
+//     └───────────────────────────┴──────────────────────────────┘
+//      hi: bits 127..64                lo: bits 63..0
+//
+// `hi` carries the 48-bit timestamp in its top half and the TOP 16 of
+// the 80 random bits in its bottom half; `lo` carries the other 64.
+// Two integers and no indirection, so a ULID in a struct or a list
+// costs what the bits cost, and `Ulid` is the same shape as uuid-nv's
+// `Uuid` — which is what makes the bridge in `ulidcvt` free.
+//
+// WHY SORTING IS THE WHOLE POINT.  The timestamp is at the TOP, so an
+// unsigned comparison of the 128 bits is a comparison of the two
+// timestamps, and ties break on entropy.  Because Crockford base32 is
+// ordered — its alphabet's characters ascend with their values —
+// a byte-wise sort of the 26-character TEXT gives the same order as a
+// numeric sort of the bits.  So a database with a `char(26)` primary
+// key gets chronological order from its ordinary index, and a listing
+// of files named by ULID comes out of `ls` in the order they were
+// made.  This is the property every other decision in the package
+// protects.
+//
+// NOTHING HERE CAN FAIL.  Any 128 bits are a ULID.  `of_halves` takes
+// two integers and answers a value; there is no version nibble to be
+// wrong and no checksum to disagree.  The `Result`s in this package are
+// all in `ulidtext`, `ulidseq` and `ulidcvt`, where something outside
+// the value is involved.
+//
+// `byte_at` IS THE DEVICE'S WHOLE OUTPUT PATH.  `to_bytes` allocates a
+// `Bytes`, which the embedded runtime has no allocator for.  `byte_at`
+// is integer arithmetic, so firmware writing a ULID into a static
+// buffer or onto a UART calls it sixteen times and allocates nothing —
+// and `ulidtext.char_at` is the same idea for the text form.
+
+use uliderr
+
+// A ULID: 128 bits, as the two halves of its big-endian layout.
+//
+// The halves are the representation rather than a byte buffer because
+// every field this module reads or writes is a bit range and none of
+// them crosses the eighth byte — the timestamp is the top 48 bits of
+// `hi` and the randomness is the rest.
+pub struct Ulid
+    // Bits 127..64: the 48-bit timestamp, then the top 16 random bits.
+    hi: Int
+    // Bits 63..0: the low 64 random bits.
+    lo: Int
+
+// How many bytes a ULID occupies on a wire or in a column.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.byte_len()}")
+// ```
+pub @tier(embedded)
+fn byte_len() -> Int []
+    todo("ulid-nv.ulid.byte_len")
+
+// How many bits the timestamp occupies: 48.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.timestamp_bits()}")
+// ```
+pub @tier(embedded)
+fn timestamp_bits() -> Int []
+    todo("ulid-nv.ulid.timestamp_bits")
+
+// How many bits the randomness occupies: 80.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.random_bits()}")
+// ```
+pub @tier(embedded)
+fn random_bits() -> Int []
+    todo("ulid-nv.ulid.random_bits")
+
+// The largest millisecond a ULID can carry: 2^48 - 1, which is
+// 281474976710655, which is 10889-08-02.
+//
+// Published as a function rather than left in a comment, because a
+// caller validating a timestamp it read from somewhere else needs the
+// number and a number in a README is not something a build can read.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.max_timestamp_ms()}")
+// ```
+pub @tier(embedded)
+fn max_timestamp_ms() -> Int []
+    todo("ulid-nv.ulid.max_timestamp_ms")
+
+// True when a millisecond fits in 48 bits, and is not negative.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     let ok = ulid.timestamp_fits(1700000000000)
+//     println("${ok}")
+// ```
+pub @tier(embedded)
+fn timestamp_fits(unix_ms: Int) -> Bool []
+    todo("ulid-nv.ulid.timestamp_fits")
+
+// The all-zero ULID: timestamp 0, randomness 0.
+//
+// The value that sorts before every other one, for an inclusive lower
+// bound on a range scan.  It is a legal ULID and it is also what a
+// field nobody filled in looks like, so `is_nil` exists to let a caller
+// tell the two apart at the point where that matters.
+//
+// ```novo
+// use ulid
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.encode(ulid.nil()))
+// ```
+pub @tier(embedded)
+fn nil() -> Ulid []
+    todo("ulid-nv.ulid.nil")
+
+// The all-ones ULID.
+//
+// The sentinel that sorts after every other one, for an inclusive
+// upper bound.  Its timestamp is `max_timestamp_ms()`.
+//
+// ```novo
+// use ulid
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.encode(ulid.max()))
+// ```
+pub @tier(embedded)
+fn max() -> Ulid []
+    todo("ulid-nv.ulid.max")
+
+// A ULID from its two halves, exactly as they are.
+//
+// The raw constructor, for a caller that read 128 bits from a column,
+// a packet or another package's identifier type.  No validation,
+// because there is none to do.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     let u = ulid.of_halves(0x0192F1B2C3D40000, 1)
+//     println("${ulid.timestamp_ms(u)}")
+// ```
+pub @tier(embedded)
+fn of_halves(hi: Int, lo: Int) -> Ulid []
+    todo("ulid-nv.ulid.of_halves")
+
+// A ULID from a millisecond and eighty random bits, the top sixteen
+// and the low sixty-four given separately.
+//
+// Two arguments for the entropy rather than one, because 80 bits do
+// not fit in an `Int` and a package that took a `Bytes` here could not
+// be called from firmware.  The timestamp is MASKED to 48 bits rather
+// than refused — `of_parts_checked` is the refusing form, and the two
+// exist separately so that a caller who has already checked does not
+// pay for a `Result` it will unwrap.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     let u = ulid.of_parts(1700000000000, 0xBEEF, 0x0123456789ABCDEF)
+//     println("${ulid.timestamp_ms(u)}")
+// ```
+pub @tier(embedded)
+fn of_parts(unix_ms: Int, random_hi16: Int, random_lo64: Int) -> Ulid []
+    todo("ulid-nv.ulid.of_parts")
+
+// The same, refusing a timestamp that does not fit in 48 bits.
+//
+// For the caller whose millisecond came from outside the program — a
+// request body, a migration, a file's mtime on a machine whose clock
+// is wrong by a factor of a thousand.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     match ulid.of_parts_checked(1700000000000, 0xBEEF, 1)
+//         Ok(u)  => println("${ulid.timestamp_ms(u)}")
+//         Err(f) => println(f.message())
+// ```
+pub fn of_parts_checked(unix_ms: Int, random_hi16: Int,
+                        random_lo64: Int) -> Result<Ulid, uliderr.UlidFault> []
+    todo("ulid-nv.ulid.of_parts_checked")
+
+// The high half: bits 127..64.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.hi(ulid.nil())}")
+// ```
+pub @tier(embedded)
+fn hi(u: Ulid) -> Int []
+    todo("ulid-nv.ulid.hi")
+
+// The low half: bits 63..0.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.lo(ulid.max())}")
+// ```
+pub @tier(embedded)
+fn lo(u: Ulid) -> Int []
+    todo("ulid-nv.ulid.lo")
+
+// The 48-bit millisecond since the Unix epoch.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     let u = ulid.of_parts(1700000000000, 0, 0)
+//     println("${ulid.timestamp_ms(u)}")
+// ```
+pub @tier(embedded)
+fn timestamp_ms(u: Ulid) -> Int []
+    todo("ulid-nv.ulid.timestamp_ms")
+
+// The top sixteen of the eighty random bits.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.random_hi16(ulid.max())}")
+// ```
+pub @tier(embedded)
+fn random_hi16(u: Ulid) -> Int []
+    todo("ulid-nv.ulid.random_hi16")
+
+// The low sixty-four of the eighty random bits.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.random_lo64(ulid.nil())}")
+// ```
+pub @tier(embedded)
+fn random_lo64(u: Ulid) -> Int []
+    todo("ulid-nv.ulid.random_lo64")
+
+// The same randomness under a different millisecond.
+//
+// What a test fixture wants, and what a migration rewriting a batch of
+// identifiers onto a corrected clock wants.  The timestamp is masked to
+// 48 bits.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     let u = ulid.with_timestamp(ulid.max(), 0)
+//     println("${ulid.timestamp_ms(u)}")
+// ```
+pub @tier(embedded)
+fn with_timestamp(u: Ulid, unix_ms: Int) -> Ulid []
+    todo("ulid-nv.ulid.with_timestamp")
+
+// One byte of the big-endian sixteen, index 0 being the most
+// significant.
+//
+// THE DEVICE'S WHOLE OUTPUT PATH.  `to_bytes` allocates and the
+// embedded runtime has no allocator; this is a shift and a mask, so
+// firmware writes a ULID into a static buffer or onto a UART with
+// sixteen calls and no heap.  An index outside 0..15 answers 0.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.byte_at(ulid.max(), 0)}")
+// ```
+pub @tier(embedded)
+fn byte_at(u: Ulid, index: Int) -> Int []
+    todo("ulid-nv.ulid.byte_at")
+
+// The sixteen bytes, most significant first.
+//
+// THIS IS ALSO THE UUID BYTE LAYOUT — see `ulidcvt`, and read what it
+// says about the version nibble before handing these to a UUID type.
+//
+// ```novo
+// use ulid
+// use std.bytes
+//
+// fn main() [io]
+//     println("${bytes.len(ulid.to_bytes(ulid.nil()))}")
+// ```
+pub @tier(app)
+fn to_bytes(u: Ulid) -> Bytes []
+    todo("ulid-nv.ulid.to_bytes")
+
+// A ULID from sixteen big-endian bytes, or `None` when there are not
+// exactly sixteen.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     match ulid.of_bytes(ulid.to_bytes(ulid.max()))
+//         Some(u) => println("${ulid.timestamp_ms(u)}")
+//         None    => println("not sixteen bytes")
+// ```
+pub @tier(app)
+fn of_bytes(b: Bytes) -> ?Ulid []
+    todo("ulid-nv.ulid.of_bytes")
+
+// Compare two ULIDs as UNSIGNED 128-bit integers: `-1`, `0` or `1`.
+//
+// Unsigned is the whole subtlety.  Both halves are stored in a signed
+// `Int`, so a timestamp past 2^63 — or any high half with its top bit
+// set, which `max()` has — compares BACKWARDS under an ordinary `<`.
+// A sort that got this wrong would put the newest identifiers first
+// and nothing else about the program would look wrong.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     println("${ulid.cmp(ulid.nil(), ulid.max())}")
+// ```
+pub @tier(embedded)
+fn cmp(a: Ulid, b: Ulid) -> Int []
+    todo("ulid-nv.ulid.cmp")
+
+// True when two ULIDs are the same 128 bits.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     let same = ulid.eq(ulid.nil(), ulid.nil())
+//     println("${same}")
+// ```
+pub @tier(embedded)
+fn eq(a: Ulid, b: Ulid) -> Bool []
+    todo("ulid-nv.ulid.eq")
+
+// True when every one of the 128 bits is zero.
+//
+// A legal ULID, and also what an unfilled column looks like.  The
+// predicate exists so a caller can tell the two apart at the one place
+// where it matters, rather than comparing against `nil()` in six.
+//
+// ```novo
+// use ulid
+//
+// fn main() [io]
+//     let empty = ulid.is_nil(ulid.nil())
+//     println("${empty}")
+// ```
+pub @tier(embedded)
+fn is_nil(u: Ulid) -> Bool []
+    todo("ulid-nv.ulid.is_nil")
+
+// The smallest ULID with this millisecond: the timestamp, then eighty
+// zero bits.
+//
+// Half of a range scan.  `WHERE id >= floor(t0) AND id < floor(t1)`
+// selects exactly the identifiers minted in `[t0, t1)`, with no
+// timestamp column and no function on the indexed side of the
+// comparison — which is the practical reason to use a sortable
+// identifier at all.
+//
+// ```novo
+// use ulid
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.encode(ulid.floor_of(1700000000000)))
+// ```
+pub @tier(embedded)
+fn floor_of(unix_ms: Int) -> Ulid []
+    todo("ulid-nv.ulid.floor_of")
+
+// The largest ULID with this millisecond: the timestamp, then eighty
+// one bits.
+//
+// The other half of an INCLUSIVE range scan, for a store whose range
+// operator has no exclusive upper bound.
+//
+// ```novo
+// use ulid
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.encode(ulid.ceiling_of(1700000000000)))
+// ```
+pub @tier(embedded)
+fn ceiling_of(unix_ms: Int) -> Ulid []
+    todo("ulid-nv.ulid.ceiling_of")

@@ -1,0 +1,303 @@
+// ulid_tests.nv — the 128-bit layout, the unsigned comparison, and the
+// sequence.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: ulid-nv.<module>.<fn>`.
+//
+// THE ASSERTIONS THAT MATTER ARE THE COMPARISONS.  A ULID's whole value
+// is that it sorts, and both halves live in a SIGNED `Int` — so a
+// comparison written with `<` gets it backwards for every value whose
+// high half has its top bit set, which is half of them once the year is
+// past 2262 and all of them for `max()`.  A sort that is wrong that way
+// puts the newest records first and nothing else about the program
+// looks wrong.
+
+use std.test
+use std.bytes
+use ulid
+use ulidseq
+use uliderr
+
+@test
+fn test_the_field_layout() [io]
+    let u = ulid.of_parts(1469918176385, 0xBEEF, 0x0123456789ABCDEF)
+
+    test.case("the timestamp comes back")
+    test.assert(ulid.timestamp_ms(u) == 1469918176385)
+
+    test.case("the top sixteen random bits come back")
+    test.assert(ulid.random_hi16(u) == 0xBEEF)
+
+    test.case("the low sixty-four come back")
+    test.assert(ulid.random_lo64(u) == 0x0123456789ABCDEF)
+
+    test.case("and the halves rebuild the same value")
+    test.assert(ulid.eq(ulid.of_halves(ulid.hi(u), ulid.lo(u)), u))
+
+@test
+fn test_the_sizes_are_published_as_numbers() [io]
+    test.case("sixteen bytes")
+    test.assert(ulid.byte_len() == 16)
+
+    test.case("forty-eight bits of timestamp")
+    test.assert(ulid.timestamp_bits() == 48)
+
+    test.case("eighty bits of randomness")
+    test.assert(ulid.random_bits() == 80)
+
+    test.case("and 48 plus 80 is the whole value")
+    test.assert(ulid.timestamp_bits() + ulid.random_bits() == ulid.byte_len() * 8)
+
+@test
+fn test_the_timestamp_ceiling() [io]
+    test.case("2^48 - 1")
+    test.assert(ulid.max_timestamp_ms() == 281474976710655)
+
+    test.case("a real millisecond fits")
+    test.assert(ulid.timestamp_fits(1469918176385))
+
+    test.case("the ceiling itself fits")
+    test.assert(ulid.timestamp_fits(281474976710655))
+
+    test.case("one past it does not")
+    test.assert(ulid.timestamp_fits(281474976710656) == false)
+
+    test.case("and neither does a negative one")
+    test.assert(ulid.timestamp_fits(0 - 1) == false)
+
+@test
+fn test_the_masking_constructor_and_the_refusing_one_are_two_functions() [io]
+    test.case("of_parts masks rather than refusing")
+    test.assert(ulid.timestamp_ms(ulid.of_parts(281474976710656, 0, 0)) == 0)
+
+    test.case("of_parts_checked refuses, naming the value")
+    match ulid.of_parts_checked(281474976710656, 0, 0)
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
+
+    test.case("and accepts a value that fits")
+    match ulid.of_parts_checked(1469918176385, 0, 0)
+        Ok(u)  => test.assert(ulid.timestamp_ms(u) == 1469918176385)
+        Err(_) => test.assert(false)
+
+@test
+fn test_the_comparison_is_unsigned_which_is_the_whole_subtlety() [io]
+    test.case("nil sorts before max")
+    test.assert(ulid.cmp(ulid.nil(), ulid.max()) == 0 - 1)
+
+    test.case("max sorts after nil — the case a signed `<` gets backwards")
+    test.assert(ulid.cmp(ulid.max(), ulid.nil()) == 1)
+
+    test.case("a value equals itself")
+    test.assert(ulid.cmp(ulid.max(), ulid.max()) == 0)
+
+    test.case("a high half with its top bit set is GREATER, not less")
+    let big = ulid.of_halves(0 - 1, 0)
+    let small = ulid.of_halves(1, 0)
+    test.assert(ulid.cmp(big, small) == 1)
+
+    test.case("and the low half compares unsigned too")
+    test.assert(ulid.cmp(ulid.of_halves(0, 0 - 1), ulid.of_halves(0, 1)) == 1)
+
+@test
+fn test_an_earlier_millisecond_always_sorts_first() [io]
+    let early = ulid.of_parts(1469918176385, 0xFFFF, 0xFFFFFFFFFFFFFFFF)
+    let late = ulid.of_parts(1469918176386, 0, 0)
+
+    test.case("even with the maximum entropy against the minimum")
+    test.assert(ulid.cmp(early, late) == 0 - 1)
+
+@test
+fn test_the_range_bounds_a_scan_is_written_with() [io]
+    let ms = 1469918176385
+    let mid = ulid.of_parts(ms, 0x8000, 0)
+
+    test.case("the floor is at or below every ULID of that millisecond")
+    test.assert(ulid.cmp(ulid.floor_of(ms), mid) == 0 - 1)
+
+    test.case("the ceiling is at or above every one")
+    test.assert(ulid.cmp(ulid.ceiling_of(ms), mid) == 1)
+
+    test.case("the floor's randomness is zero")
+    test.assert(ulid.random_lo64(ulid.floor_of(ms)) == 0)
+
+    test.case("the floor of the next millisecond is above the ceiling of this one")
+    test.assert(ulid.cmp(ulid.floor_of(ms + 1), ulid.ceiling_of(ms)) == 1)
+
+@test
+fn test_nil_is_a_legal_value_and_also_the_empty_one() [io]
+    test.case("nil is nil")
+    test.assert(ulid.is_nil(ulid.nil()))
+
+    test.case("its timestamp is zero and so is its randomness")
+    test.assert(ulid.timestamp_ms(ulid.nil()) == 0)
+    test.assert(ulid.random_lo64(ulid.nil()) == 0)
+
+    test.case("max is not nil")
+    test.assert(ulid.is_nil(ulid.max()) == false)
+
+    test.case("max's timestamp is the ceiling")
+    test.assert(ulid.timestamp_ms(ulid.max()) == ulid.max_timestamp_ms())
+
+@test
+fn test_the_byte_form_is_big_endian_and_byte_at_agrees_with_it() [io]
+    // `byte_at` is the device's whole output path and `to_bytes` is the
+    // host's; asserting that they agree is what stops the two drifting.
+    let u = ulid.of_parts(1469918176385, 0xBEEF, 0x0123456789ABCDEF)
+
+    test.case("sixteen bytes")
+    test.assert(bytes.len(ulid.to_bytes(u)) == 16)
+
+    test.case("the most significant byte is index 0")
+    test.assert(ulid.byte_at(ulid.max(), 0) == 255)
+
+    test.case("and the least significant is index 15")
+    test.assert(ulid.byte_at(ulid.max(), 15) == 255)
+
+    test.case("nil is sixteen zeros")
+    test.assert(ulid.byte_at(ulid.nil(), 0) == 0)
+    test.assert(ulid.byte_at(ulid.nil(), 15) == 0)
+
+    test.case("an index outside the range answers 0 rather than reading off the end")
+    test.assert(ulid.byte_at(u, 16) == 0)
+    test.assert(ulid.byte_at(u, 0 - 1) == 0)
+
+    test.case("and the bytes round-trip")
+    match ulid.of_bytes(ulid.to_bytes(u))
+        Some(v) => test.assert(ulid.eq(u, v))
+        None    => test.assert(false)
+
+    test.case("a wrong length does not")
+    match ulid.of_bytes(bytes.zeros(15))
+        Some(_) => test.assert(false)
+        None    => test.assert(true)
+
+@test
+fn test_with_timestamp_keeps_the_randomness() [io]
+    let u = ulid.of_parts(1469918176385, 0xBEEF, 0x0123456789ABCDEF)
+    let moved = ulid.with_timestamp(u, 1)
+
+    test.case("the timestamp changed")
+    test.assert(ulid.timestamp_ms(moved) == 1)
+
+    test.case("the randomness did not")
+    test.assert(ulid.random_hi16(moved) == 0xBEEF)
+    test.assert(ulid.random_lo64(moved) == 0x0123456789ABCDEF)
+
+@test
+fn test_a_new_millisecond_takes_the_entropy_offered() [io]
+    match ulidseq.next(ulidseq.empty(), 1469918176385, 0xBEEF, 7)
+        Err(_)     => test.assert(false)
+        Ok((s, u)) =>
+            test.case("the identifier carries what was offered")
+            test.assert(ulid.random_lo64(u) == 7)
+
+            test.case("and the sequence remembers the millisecond")
+            test.assert(ulidseq.issued_ms(s) == 1469918176385)
+
+@test
+fn test_the_same_millisecond_increments_rather_than_redrawing() [io]
+    // This is what makes the order inside a millisecond the order of
+    // issue, which is the whole reason the sequence exists.
+    match ulidseq.next(ulidseq.empty(), 1469918176385, 0, 7)
+        Err(_)       => test.assert(false)
+        Ok((s1, u1)) =>
+            match ulidseq.next(s1, 1469918176385, 0xFFFF, 0xFFFFFFFF)
+                Err(_)       => test.assert(false)
+                Ok((s2, u2)) =>
+                    test.case("the second ignores the entropy offered and adds one")
+                    test.assert(ulid.random_lo64(u2) == 8)
+
+                    test.case("so the second sorts after the first")
+                    test.assert(ulid.cmp(u1, u2) == 0 - 1)
+
+                    test.case("and the timestamp is unchanged")
+                    test.assert(ulid.timestamp_ms(u2) == 1469918176385)
+
+@test
+fn test_the_increment_carries_across_the_two_halves() [io]
+    // Eighty bits are stored as sixteen and sixty-four; the carry
+    // between them is the arithmetic a 32-bit core makes interesting
+    // and the one an implementation forgets.
+    let s = ulidseq.resuming(ulid.of_parts(1469918176385, 3, 0xFFFFFFFFFFFFFFFF))
+    match ulidseq.next(s, 1469918176385, 0, 0)
+        Err(_)      => test.assert(false)
+        Ok((s2, u)) =>
+            test.case("the low half wrapped to zero")
+            test.assert(ulid.random_lo64(u) == 0)
+
+            test.case("and the high half took the carry")
+            test.assert(ulid.random_hi16(u) == 4)
+
+@test
+fn test_exhausting_a_millisecond_is_named_rather_than_wrapped() [io]
+    // Wrapping would reissue a value the sequence already gave out.
+    let s = ulidseq.resuming(ulid.of_parts(1469918176385, 0xFFFF, 0xFFFFFFFFFFFFFFFF))
+
+    test.case("refused")
+    match ulidseq.next(s, 1469918176385, 0, 0)
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
+
+    test.case("and nothing is left in that millisecond")
+    let (rem_hi, rem_lo) = ulidseq.remaining_in_ms(s)
+    test.assert(rem_hi == 0)
+    test.assert(rem_lo == 0)
+
+    test.case("a fresh millisecond has the whole space")
+    let fresh = ulidseq.resuming(ulid.of_parts(1469918176385, 0, 0))
+    let (fh, fl) = ulidseq.remaining_in_ms(fresh)
+    test.assert(fh == 0xFFFF)
+
+@test
+fn test_a_backwards_clock_is_refused_and_the_relaxed_form_carries_on() [io]
+    // NTP steps and virtual machines resume.  Both corrections are
+    // worse than the refusal, so the refusal is the default and the
+    // correction has its own name.
+    let s = ulidseq.resuming(ulid.of_parts(1469918176385, 0, 5))
+
+    test.case("an earlier millisecond is refused, naming both")
+    match ulidseq.next(s, 1469918176384, 0, 0)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.is_text_fault(f) == false)
+
+    test.case("the relaxed form holds the last millisecond and increments")
+    match ulidseq.next_relaxed(s, 1469918176384, 0, 0)
+        Err(_)      => test.assert(false)
+        Ok((s2, u)) =>
+            test.assert(ulid.timestamp_ms(u) == 1469918176385)
+            test.assert(ulid.random_lo64(u) == 6)
+
+    test.case("and the same millisecond is not backwards — it is the ordinary increment")
+    match ulidseq.next(s, 1469918176385, 0, 0)
+        Ok((s3, u3)) => test.assert(ulid.random_lo64(u3) == 6)
+        Err(_)       => test.assert(false)
+
+@test
+fn test_peek_answers_what_next_would_without_advancing() [io]
+    let s = ulidseq.resuming(ulid.of_parts(1469918176385, 0, 5))
+
+    match ulidseq.peek(s, 1469918176385, 0, 0)
+        Err(_) => test.assert(false)
+        Ok(p)  =>
+            test.case("peek is the identifier next would answer")
+            test.assert(ulid.random_lo64(p) == 6)
+
+            test.case("and the sequence has not moved")
+            test.assert(ulid.random_lo64(ulidseq.last(s)) == 5)
+
+@test
+fn test_an_empty_sequence_says_so() [io]
+    let s = ulidseq.empty()
+
+    test.case("it is empty")
+    test.assert(ulidseq.is_empty(s))
+
+    test.case("its millisecond is -1, which is not a millisecond")
+    test.assert(ulidseq.issued_ms(s) == 0 - 1)
+
+    test.case("and its last identifier is nil")
+    test.assert(ulid.is_nil(ulidseq.last(s)))
+
+    test.case("a resuming sequence is not empty")
+    test.assert(ulidseq.is_empty(ulidseq.resuming(ulid.max())) == false)

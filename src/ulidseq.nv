@@ -1,0 +1,218 @@
+// ulidseq.nv — monotonicity, as a value the caller threads.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// WHAT MONOTONICITY IS FOR.  A ULID's timestamp is a millisecond, and a
+// program that mints two identifiers in the same millisecond gets two
+// values whose order is the order of their ENTROPY — which is to say,
+// random.  So "sorted by identifier" and "sorted by when it was made"
+// agree between milliseconds and disagree inside one, and a batch
+// insert of a thousand rows in four milliseconds comes out shuffled in
+// blocks of two hundred and fifty.
+//
+// The specification's answer is to increment: inside one millisecond,
+// the next identifier is the previous one plus 1, so the order inside
+// the millisecond is the order of issue.  That costs one bit of
+// unpredictability — an attacker who holds one identifier can guess the
+// next — which is why it is a SEPARATE value a caller opts into rather
+// than what `ulidgen.new` does.
+//
+// THE STATE IS THE CALLER'S, AND THAT IS THE WHOLE DESIGN.  A
+// `UlidSeq` is two integers and a millisecond; `next` takes one and
+// answers a new one.  Nothing here is global, nothing here locks, and
+// nothing here is `[mutate]`.  Three things follow:
+//
+//   - A `core` package can do this at all.  A hidden global would need
+//     `[mutate]` on every row and the package would be `host`.
+//   - Two independent sequences are two values.  A service sharding by
+//     tenant keeps one per tenant and they do not contend.
+//   - The clock is an ARGUMENT.  `next` takes the millisecond, so the
+//     whole of monotonicity — the increment, the overflow, the
+//     backwards clock — is tested by calling it with numbers, and
+//     `ulidgen` is the only thing that needs a clock at all.
+//
+// A BACKWARDS CLOCK IS A REFUSAL AND NOT A CORRECTION.  NTP steps,
+// virtual machines resume, and a container's clock can move backwards
+// by seconds.  Both corrections are worse than the refusal: reusing the
+// last timestamp makes the identifier lie about when it was made, and
+// accepting the earlier one breaks the sort.  `next` answers
+// `UlidClockWentBackwards` naming both milliseconds; `next_relaxed`
+// carries on by holding the last timestamp and incrementing, and it is
+// a different function so that the choice is visible where it is made.
+
+use ulid
+use uliderr
+
+// A monotonic sequence: the last identifier issued, and nothing else.
+//
+// Small and copyable, because it is threaded through every call and a
+// state that is awkward to pass gets kept in a global instead.
+pub struct UlidSeq
+    // The millisecond the last identifier carried, or `-1` before the
+    // first one.
+    last_ms: Int
+    // The top sixteen random bits of the last identifier.
+    last_hi16: Int
+    // The low sixty-four random bits of the last identifier.
+    last_lo64: Int
+
+// A sequence that has issued nothing.
+//
+// ```novo
+// use ulidseq
+//
+// fn main() [io]
+//     println("${ulidseq.issued_ms(ulidseq.empty())}")
+// ```
+pub @tier(embedded)
+fn empty() -> UlidSeq []
+    todo("ulid-nv.ulidseq.empty")
+
+// A sequence resuming from an identifier already issued.
+//
+// What a service restarting from a checkpoint needs: it read the
+// highest identifier out of its store and must not issue one below it.
+//
+// ```novo
+// use ulid
+// use ulidseq
+//
+// fn main() [io]
+//     let s = ulidseq.resuming(ulid.max())
+//     println("${ulidseq.issued_ms(s)}")
+// ```
+pub @tier(embedded)
+fn resuming(u: Ulid) -> UlidSeq []
+    todo("ulid-nv.ulidseq.resuming")
+
+// The millisecond of the last identifier issued, or `-1`.
+//
+// ```novo
+// use ulidseq
+//
+// fn main() [io]
+//     println("${ulidseq.issued_ms(ulidseq.empty())}")
+// ```
+pub @tier(embedded)
+fn issued_ms(s: UlidSeq) -> Int []
+    todo("ulid-nv.ulidseq.issued_ms")
+
+// The last identifier issued, or `ulid.nil()` before the first one.
+//
+// ```novo
+// use ulid
+// use ulidseq
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.encode(ulidseq.last(ulidseq.empty())))
+// ```
+pub @tier(embedded)
+fn last(s: UlidSeq) -> Ulid []
+    todo("ulid-nv.ulidseq.last")
+
+// True when this sequence has issued nothing yet.
+//
+// ```novo
+// use ulidseq
+//
+// fn main() [io]
+//     let fresh = ulidseq.is_empty(ulidseq.empty())
+//     println("${fresh}")
+// ```
+pub @tier(embedded)
+fn is_empty(s: UlidSeq) -> Bool []
+    todo("ulid-nv.ulidseq.is_empty")
+
+// THE ONE FUNCTION: the next identifier, and the sequence that
+// remembers it.
+//
+// A NEW millisecond takes the entropy offered.  The SAME millisecond
+// ignores the entropy entirely and increments the previous identifier's
+// eighty random bits by one — which is what makes the order inside a
+// millisecond the order of issue.  An EARLIER millisecond is
+// `UlidClockWentBackwards`.  Eighty bits of ones in the same
+// millisecond is `UlidMonotonicExhausted`.
+//
+// The entropy is two arguments because eighty bits do not fit in an
+// `Int`, and it arrives as an argument because a `core` package has no
+// generator — `ulidgen.next` is the convenience that draws it.
+//
+// ```novo
+// use ulid
+// use ulidseq
+//
+// fn main() [io]
+//     match ulidseq.next(ulidseq.empty(), 1700000000000, 0xBEEF, 1)
+//         Ok((s, u)) => println("${ulid.timestamp_ms(u)}")
+//         Err(f)     => println(f.message())
+// ```
+pub fn next(s: UlidSeq, unix_ms: Int, random_hi16: Int,
+            random_lo64: Int) -> Result<(UlidSeq, Ulid), uliderr.UlidFault> []
+    todo("ulid-nv.ulidseq.next")
+
+// The same, carrying on through a clock that went backwards by holding
+// the last millisecond and incrementing.
+//
+// For a service that would rather issue an identifier stamped a few
+// milliseconds late than fail a request.  The identifier's timestamp
+// is then NOT when it was made, and the sort is preserved — which is
+// the trade this function's name is there to make visible at the call
+// site.
+//
+// Still fails on `UlidMonotonicExhausted`, because there is no value
+// left to issue.
+//
+// ```novo
+// use ulid
+// use ulidseq
+//
+// fn main() [io]
+//     let s = ulidseq.resuming(ulid.of_parts(1700000000005, 0, 0))
+//     match ulidseq.next_relaxed(s, 1700000000000, 0, 1)
+//         Ok((s2, u)) => println("${ulid.timestamp_ms(u)}")
+//         Err(f)      => println(f.message())
+// ```
+pub fn next_relaxed(s: UlidSeq, unix_ms: Int, random_hi16: Int,
+                    random_lo64: Int) -> Result<(UlidSeq, Ulid), uliderr.UlidFault> []
+    todo("ulid-nv.ulidseq.next_relaxed")
+
+// How many identifiers this sequence could still issue in its current
+// millisecond.
+//
+// `2^80 - 1` minus the randomness already reached, as the two halves
+// of an eighty-bit number so that a caller on a device can read it
+// without a big integer.  A batch writer sizing a run asks this
+// before it starts rather than discovering `UlidMonotonicExhausted`
+// halfway through.
+//
+// ```novo
+// use ulidseq
+//
+// fn main() [io]
+//     let (hi, lo) = ulidseq.remaining_in_ms(ulidseq.empty())
+//     println("${hi} ${lo}")
+// ```
+pub @tier(embedded)
+fn remaining_in_ms(s: UlidSeq) -> (Int, Int) []
+    todo("ulid-nv.ulidseq.remaining_in_ms")
+
+// The identifier `next` WOULD answer for this millisecond and entropy,
+// without advancing the sequence.
+//
+// For a caller that must write the identifier and the sequence
+// together, transactionally, and cannot advance one before the other
+// is durable.
+//
+// ```novo
+// use ulid
+// use ulidseq
+//
+// fn main() [io]
+//     match ulidseq.peek(ulidseq.empty(), 1700000000000, 0, 1)
+//         Ok(u)  => println("${ulid.timestamp_ms(u)}")
+//         Err(f) => println(f.message())
+// ```
+pub fn peek(s: UlidSeq, unix_ms: Int, random_hi16: Int,
+            random_lo64: Int) -> Result<Ulid, uliderr.UlidFault> []
+    todo("ulid-nv.ulidseq.peek")

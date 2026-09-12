@@ -1,0 +1,300 @@
+// ulidtext.nv — THE LOAD-BEARING INTERFACE: the text form is a
+// FUNCTION FROM AN INDEX TO A CHARACTER.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// Every other ULID library's encoder is `fn encode(u) -> String`: it
+// allocates twenty-six bytes, fills them, and hands them over.  That
+// function is here too, and it is `to_str`'s convenience.  But it is
+// not the primitive, because it cannot be:
+//
+//   - the embedded runtime has no allocator, so a `Bytes` or a `Str`
+//     is not a thing firmware can be handed;
+//   - a caller writing into a fixed-size record does not want a second
+//     buffer to copy out of;
+//   - and a caller emitting onto a UART wants one byte at a time.
+//
+// So the primitive is `char_at(u, i) -> Int`: the byte code of the
+// i-th character of the 26-character form, computed with a shift and a
+// mask and nothing else.  Firmware writes a ULID with a bounded `for`
+// and no heap.  `encode` is that loop written once for a host.  The
+// same inversion is `ulid.byte_at`'s, for the binary form.
+//
+// CROCKFORD BASE32, AND THE THREE RULES PEOPLE SKIP.
+//
+// The alphabet is `0123456789ABCDEFGHJKMNPQRSTVWXYZ` — thirty-two
+// characters with `I`, `L`, `O` and `U` left out.  The first three are
+// left out because they are confusable with `1`, `1` and `0`; `U` is
+// left out so that a random identifier cannot spell an obscenity.
+//
+//   1. The alphabet is ORDERED.  Its characters ascend with their
+//      values, which is the reason a byte-wise sort of the text equals
+//      a numeric sort of the bits.  A library that used RFC 4648's
+//      alphabet would produce identifiers that sort WRONG, and nothing
+//      about them would look wrong.
+//
+//   2. DECODING IS FORGIVING, ENCODING IS NOT.  On the way in, `i`,
+//      `I`, `l` and `L` all mean 1, and `o` and `O` mean 0, and every
+//      letter is case-insensitive — because a ULID gets read off a
+//      screen and typed back in.  On the way out there is exactly one
+//      spelling: upper case, and never an alias.  `U` is NOT an alias:
+//      it is `UlidBadDigit`, because the whole point of excluding it
+//      is that it is not supposed to appear.
+//
+//   3. THE FIRST CHARACTER CANNOT EXCEED `7`.  Twenty-six base-32
+//      digits carry 130 bits; a ULID is 128.  So the top two bits of
+//      the first digit must be zero, and `8ZZZ…` is a string that
+//      parses digit by digit and is not a ULID.  Most implementations
+//      truncate silently, which makes `8ZZZ…` and `0ZZZ…` decode to
+//      the same value — two distinct primary keys that are equal.
+//      `parse` answers `UlidTextOverflow` and names the character.
+
+use ulid
+use uliderr
+
+// How many characters the text form occupies: 26.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     println("${ulidtext.text_len()}")
+// ```
+pub @tier(embedded)
+fn text_len() -> Int []
+    todo("ulid-nv.ulidtext.text_len")
+
+// How many of those characters carry the timestamp: 10.
+//
+// Ten characters are 50 bits and the timestamp is 48, which is where
+// the two spare bits of rule 3 come from.  Published because a caller
+// doing a prefix range scan — "every identifier from this
+// millisecond" — needs the number.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     println("${ulidtext.timestamp_len()}")
+// ```
+pub @tier(embedded)
+fn timestamp_len() -> Int []
+    todo("ulid-nv.ulidtext.timestamp_len")
+
+// Crockford's alphabet, in value order.
+//
+// `0123456789ABCDEFGHJKMNPQRSTVWXYZ`.  Published so that a caller can
+// build a regular expression, a check constraint or a column domain
+// from the same thirty-two characters this package encodes with,
+// rather than from a copy that drifts.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.alphabet())
+// ```
+pub @tier(app)
+fn alphabet() -> Str []
+    todo("ulid-nv.ulidtext.alphabet")
+
+// The byte code of the digit whose value is `v`, for `v` in 0..31.
+//
+// Integer arithmetic over a table; no `Str` and no allocation, so it
+// reaches a device.  A value outside the range answers 0.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     println("${ulidtext.digit_byte(0)}")
+// ```
+pub @tier(embedded)
+fn digit_byte(v: Int) -> Int []
+    todo("ulid-nv.ulidtext.digit_byte")
+
+// The value of a digit's byte code, applying every ambiguity rule, or
+// `-1` when the byte is not a digit.
+//
+// `0`-`9` are 0-9; `A`-`Z` less `I`, `L`, `O` and `U` are 10-31; `a`-`z`
+// the same; `i`, `I`, `l`, `L` are 1; `o`, `O` are 0.  `u` and `U` are
+// `-1` — see rule 2.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     println("${ulidtext.digit_value(76)}")
+// ```
+pub @tier(embedded)
+fn digit_value(byte: Int) -> Int []
+    todo("ulid-nv.ulidtext.digit_value")
+
+// THE PRIMITIVE: the byte code of character `index` of this ULID's
+// 26-character form, index 0 being the most significant.
+//
+// A shift and a mask and a table lookup.  No buffer, no allocation, no
+// `Str` — so firmware emits a ULID with a bounded `for` over
+// `0..text_len()` and the heap is untouched.  An index outside the
+// range answers 0.
+//
+// ```novo
+// use ulid
+// use ulidtext
+//
+// fn main() [io]
+//     println("${ulidtext.char_at(ulid.nil(), 0)}")
+// ```
+pub @tier(embedded)
+fn char_at(u: Ulid, index: Int) -> Int []
+    todo("ulid-nv.ulidtext.char_at")
+
+// The 26-character text form.
+//
+// The `char_at` loop written once for a caller that has an allocator.
+// Upper case, never an alias, always 26 characters — `nil()` is
+// `00000000000000000000000000`.
+//
+// ```novo
+// use ulid
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.encode(ulid.nil()))
+// ```
+pub @tier(app)
+fn encode(u: Ulid) -> Str []
+    todo("ulid-nv.ulidtext.encode")
+
+// The 26 characters written into a caller's buffer at an offset, with
+// the buffer and the next offset answered.
+//
+// For a caller assembling a record: a log line, a fixed-width column,
+// a packet.  The buffer must already have room for 26 bytes at `at`;
+// when it does not, the buffer is answered unchanged and the offset
+// answered is `at`, so a caller comparing the two sees that nothing
+// was written.
+//
+// ```novo
+// use ulid
+// use ulidtext
+// use std.bytes
+//
+// fn main() [io]
+//     let out = bytes.zeros(26)
+//     let (buf, next) = ulidtext.encode_into(ulid.nil(), out, 0)
+//     println("${next}")
+// ```
+pub @tier(app)
+fn encode_into(u: Ulid, out: Bytes, at: Int) -> (Bytes, Int) []
+    todo("ulid-nv.ulidtext.encode_into")
+
+// Only the first ten characters: the timestamp's prefix.
+//
+// What a prefix range scan compares against, and what a log line that
+// already carries the full identifier does not need to repeat.
+//
+// ```novo
+// use ulid
+// use ulidtext
+//
+// fn main() [io]
+//     println(ulidtext.encode_timestamp(ulid.nil()))
+// ```
+pub @tier(app)
+fn encode_timestamp(u: Ulid) -> Str []
+    todo("ulid-nv.ulidtext.encode_timestamp")
+
+// Parse 26 characters into a ULID, applying every ambiguity rule and
+// refusing the three failures by name.
+//
+// `UlidBadLength` when it is not 26 characters; `UlidBadDigit` naming
+// the index and the byte; `UlidTextOverflow` when the first character
+// exceeds `7`.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     match ulidtext.parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+//         Ok(u)  => println("${ulid.timestamp_ms(u)}")
+//         Err(f) => println(f.message())
+// ```
+pub @tier(app)
+fn parse(text: Str) -> Result<Ulid, uliderr.UlidFault> []
+    todo("ulid-nv.ulidtext.parse")
+
+// Parse, answering `None` rather than a reason.
+//
+// For a caller filtering a list, where the reason has nowhere to go
+// and a `Result` would only be discarded.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     match ulidtext.parse_or_none("not a ulid")
+//         Some(_) => println("parsed")
+//         None    => println("no")
+// ```
+pub @tier(app)
+fn parse_or_none(text: Str) -> ?Ulid []
+    todo("ulid-nv.ulidtext.parse_or_none")
+
+// True when the text is 26 characters that would parse.
+//
+// The predicate a validator wants, without building a value it will
+// throw away.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     let ok = ulidtext.is_valid("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+//     println("${ok}")
+// ```
+pub @tier(app)
+fn is_valid(text: Str) -> Bool []
+    todo("ulid-nv.ulidtext.is_valid")
+
+// The canonical spelling of a text that parses: upper case, with every
+// alias resolved.
+//
+// `norm("01arz3ndekti1v4rrffq69g5fav")` answers the upper-case form
+// with the `I` read as `1`.  What a column constraint or a
+// deduplicating index needs, because two spellings of the same
+// identifier are the same identifier and a `char(26)` unique index
+// does not know that.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     match ulidtext.canonical("01arz3ndektsv4rrffq69g5fav")
+//         Ok(s)  => println(s)
+//         Err(f) => println(f.message())
+// ```
+pub @tier(app)
+fn canonical(text: Str) -> Result<Str, uliderr.UlidFault> []
+    todo("ulid-nv.ulidtext.canonical")
+
+// Compare two texts the way the bits compare, without parsing either.
+//
+// `-1`, `0` or `1`.  Because Crockford's alphabet is ordered, this is
+// a byte-wise comparison of the upper-cased, alias-resolved forms —
+// and it is what proves the claim the format is for: text order IS
+// value order.  A caller sorting a column of identifiers does not need
+// this function, which is the point; it is here so a test can assert
+// the equivalence.
+//
+// ```novo
+// use ulidtext
+//
+// fn main() [io]
+//     let ord = ulidtext.compare_text("0000000000000000000000000A",
+//                                     "0000000000000000000000000B")
+//     println("${ord}")
+// ```
+pub @tier(app)
+fn compare_text(a: Str, b: Str) -> Int []
+    todo("ulid-nv.ulidtext.compare_text")

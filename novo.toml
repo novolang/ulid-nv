@@ -1,0 +1,61 @@
+[package]
+name        = "ulid-nv"
+version     = "0.0.1"
+description = "ULIDs: 128 bits of sortable identifier — a 48-bit millisecond timestamp then 80 random bits — whose lexicographic order over the text IS chronological order.  The value is two Ints and the text form is a FUNCTION FROM AN INDEX TO A CHARACTER, so a device emits 26 bytes with no buffer and the whole format builds for a Cortex-M.  Crockford base32 with its ambiguity rules and the first-character overflow, monotonic generation as a value the caller threads, and the UUIDv7 bridge with the six bits it costs stated.  Interface only — every body is a todo()."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`, and NOT the `host` the plan pencilled in.
+#
+# The plan's row said `host` because minting a ULID reads the clock and
+# the entropy source.  Measured, that is ONE module: `ulidgen`, which
+# is `[time, rand]` and nothing else.  Everything the package actually
+# IS — the 128-bit layout, Crockford base32, the comparison, the
+# monotonic increment, the UUID bridge — is integer arithmetic over
+# values the caller already holds, and declaring the whole package
+# `host` would charge every consumer for a clock two functions use.
+#
+# So the narrower layer is declared and the one wide module is named.
+# `ulidgen`'s rows are measured against the host budget; everything
+# else against `core`'s `[]`; and the embedded probe is built WITHOUT
+# `ulidgen`, because one host-only function anywhere in a compilation
+# unit is an undefined symbol at embedded link time whether or not the
+# firmware calls it.
+#
+# The cost of the narrowing is one dependency this package therefore
+# does NOT take: uuid-nv is `host`, and a `core` package may not depend
+# on it.  `ulidcvt` bridges through the sixteen bytes instead, which is
+# the right shape anyway — see the README.
+layer        = "core"
+host_modules = ["ulidgen"]
+
+category    = "encoding"
+
+tags        = ["ulid", "identifier", "sortable", "base32", "crockford", "uuidv7", "monotonic"]
+repository  = "https://github.com/novolang/ulid-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Sortable identifiers whose text sorts the way the bits do"
+
+[dependencies]
+# None, and two are deliberate absences.
+#
+# uuid-nv: it is `host`, this package is `core`, and the conversion is
+# the identity on the bits anyway — `ulidcvt` speaks sixteen bytes and
+# a caller holding both packages needs no third one.
+#
+# rand-nv: `ulidgen` takes the eighty random bits as ARGUMENTS in its
+# pure form and reads `std.rand` in its convenience form.  A package
+# whose whole value is that it costs nothing should not make an
+# embedded consumer download a generator it cannot link.

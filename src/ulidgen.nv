@@ -1,0 +1,169 @@
+// ulidgen.nv — the one module in this package that performs anything.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// THIS MODULE IS THE PACKAGE'S ENTIRE `host` SURFACE, and the manifest
+// names it in `host_modules` for exactly that reason.  Two effects and
+// no others: `[time]` for the millisecond and `[rand]` for the eighty
+// bits.  Everything else in ulid-nv is `[]` arithmetic, the embedded
+// probe is built without this file, and a consumer that mints nothing
+// — a service that only PARSES identifiers arriving over a wire — pays
+// for neither.
+//
+// THE PURE HALVES ARE ALREADY PUBLISHED, so nothing here is the only
+// way to do anything.  `ulid.of_parts` builds a value from a
+// millisecond and eighty bits; `ulidseq.next` does the monotonic step.
+// This module is those two functions with the two arguments filled in
+// from the machine.  A caller with its own clock — a simulation, a
+// replay, a test — uses the pure ones and never reaches here.
+//
+// WHY THE ENTROPY IS `std.rand` AND NOT rand-nv.  A dependency a
+// firmware consumer cannot link is a dependency every consumer
+// downloads.  `std.rand` is in the standard library every program
+// already has, and a caller that wants rand-nv's generators draws the
+// bits itself and calls `ulid.of_parts`.
+//
+// WHAT `new` PROMISES ABOUT ITS RANDOMNESS.  That it came from the
+// platform's entropy source, and nothing more.  A ULID is not a
+// capability and must not be used as one: it carries its own creation
+// time in plain sight, so it tells anybody holding it when the record
+// was made, and a monotonic one tells them what the next one will be.
+// An unguessable token is `crypto-nv`'s business.
+
+use ulid
+use ulidseq
+use uliderr
+
+// A ULID stamped with the current millisecond and eighty fresh random
+// bits.
+//
+// `[time, rand]`.  The ordinary call.  Two of these in the same
+// millisecond are in random order relative to each other — see
+// `next_in` for the sequence that fixes that.
+//
+// ```novo
+// use ulidgen
+// use ulidtext
+//
+// fn main() [io, time, rand]
+//     match ulidgen.new()
+//         Ok(u)  => println(ulidtext.encode(u))
+//         Err(f) => println(f.message())
+// ```
+pub fn new() -> Result<Ulid, uliderr.UlidFault> [time, rand]
+    todo("ulid-nv.ulidgen.new")
+
+// A ULID with the current millisecond and entropy the caller supplies.
+//
+// `[time]` alone.  For a caller with its own generator — a seeded one
+// in a test, a hardware source on a device, rand-nv's — that still
+// wants the machine's clock.
+//
+// ```novo
+// use ulidgen
+// use ulidtext
+//
+// fn main() [io, time]
+//     match ulidgen.new_with(0xBEEF, 0x0123456789ABCDEF)
+//         Ok(u)  => println(ulidtext.encode(u))
+//         Err(f) => println(f.message())
+// ```
+pub fn new_with(random_hi16: Int, random_lo64: Int) -> Result<Ulid, uliderr.UlidFault> [time]
+    todo("ulid-nv.ulidgen.new_with")
+
+// The current Unix millisecond, as this package reads it.
+//
+// `[time]`.  Published so a caller threading `ulidseq` itself uses the
+// same clock this module does, and so a test can see what the machine
+// says without minting anything.
+//
+// ```novo
+// use ulidgen
+//
+// fn main() [io, time]
+//     println("${ulidgen.now_ms()}")
+// ```
+pub fn now_ms() -> Int [time]
+    todo("ulid-nv.ulidgen.now_ms")
+
+// Eighty fresh random bits, as the top sixteen and the low
+// sixty-four.
+//
+// `[rand]`.  The other half of `new`, published so a caller that has a
+// millisecond already does not need to read the clock again.
+//
+// ```novo
+// use ulidgen
+//
+// fn main() [io, rand]
+//     let (hi, lo) = ulidgen.draw_entropy()
+//     println("${hi}")
+// ```
+pub fn draw_entropy() -> (Int, Int) [rand]
+    todo("ulid-nv.ulidgen.draw_entropy")
+
+// The next identifier in a caller's monotonic sequence, with the clock
+// and the entropy read here.
+//
+// `[time, rand]`.  `ulidseq.next` with its two arguments filled in, and
+// the shape a service that mints in batches wants: it holds the
+// `UlidSeq` and gets order-of-issue ordering inside every millisecond.
+//
+// The sequence comes back beside the identifier, because it is a value
+// and this package mutates nothing.
+//
+// ```novo
+// use ulidgen
+// use ulidseq
+// use ulidtext
+//
+// fn main() [io, time, rand]
+//     match ulidgen.next_in(ulidseq.empty())
+//         Ok((s, u)) => println(ulidtext.encode(u))
+//         Err(f)     => println(f.message())
+// ```
+pub fn next_in(s: ulidseq.UlidSeq) -> Result<(ulidseq.UlidSeq, Ulid), uliderr.UlidFault> [time, rand]
+    todo("ulid-nv.ulidgen.next_in")
+
+// The same, carrying on through a clock that went backwards.
+//
+// `[time, rand]`.  `ulidseq.next_relaxed` with the machine's clock and
+// entropy.  The identifier's timestamp is then not when it was made;
+// the name is what makes that visible at the call site.
+//
+// ```novo
+// use ulidgen
+// use ulidseq
+// use ulidtext
+//
+// fn main() [io, time, rand]
+//     match ulidgen.next_in_relaxed(ulidseq.empty())
+//         Ok((s, u)) => println(ulidtext.encode(u))
+//         Err(f)     => println(f.message())
+// ```
+pub fn next_in_relaxed(s: ulidseq.UlidSeq) -> Result<(ulidseq.UlidSeq, Ulid), uliderr.UlidFault> [time, rand]
+    todo("ulid-nv.ulidgen.next_in_relaxed")
+
+// `count` identifiers from one sequence, in issue order, with the
+// clock read ONCE.
+//
+// What a batch insert wants: a thousand rows that sort in the order
+// they were written, from one clock read and one entropy draw.  The
+// sequence comes back beside them.
+//
+// Fails with `UlidMonotonicExhausted` only if `count` exceeds what the
+// millisecond has left, which `ulidseq.remaining_in_ms` answers
+// beforehand.
+//
+// ```novo
+// use ulidgen
+// use ulidseq
+//
+// fn main() [io, time, rand]
+//     match ulidgen.batch(ulidseq.empty(), 1000)
+//         Ok((s, us)) => println("${us.len()}")
+//         Err(f)      => println(f.message())
+// ```
+pub fn batch(s: ulidseq.UlidSeq,
+             count: Int) -> Result<(ulidseq.UlidSeq, [Ulid]), uliderr.UlidFault> [time, rand]
+    todo("ulid-nv.ulidgen.batch")

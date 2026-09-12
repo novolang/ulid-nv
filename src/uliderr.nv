@@ -1,0 +1,124 @@
+// uliderr.nv — everything that can go wrong, which is less than a
+// reader expects.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// A ULID CANNOT FAIL TO BE BUILT.  Any 128 bits are a ULID: there is no
+// version nibble to be wrong, no variant to be reserved, no checksum.
+// So `ulid.of_halves` and `ulid.of_parts` return a `Ulid` and not a
+// `Result`, and this enum is about TEXT, TIME and MONOTONICITY —
+// the three places where something outside the value can disagree with
+// it.
+//
+// EVERY VARIANT CARRIES WHERE IT WENT WRONG.  A parse failure names the
+// character index; a monotonic failure names the millisecond.  "invalid
+// ULID" with nothing else in it is a message a person reads twice and
+// still has to open a debugger for.
+
+// The three kinds of disagreement.
+//
+// ```novo
+// use uliderr
+//
+// fn main() [io]
+//     println(uliderr.fault_message(UlidBadLength(25)))
+// ```
+pub enum UlidFault
+    // The text is not 26 characters.  The length found is named,
+    // because 25 and 27 have different causes — a truncation and a
+    // concatenation.
+    UlidBadLength(found: Int)
+    // The character at this index is not in Crockford's alphabet after
+    // the ambiguity rules are applied.  `U` is the interesting case: it
+    // is excluded from the alphabet ON PURPOSE and is NOT an alias for
+    // anything, so `U` at index 4 is this variant and not a silent `V`.
+    UlidBadDigit(index: Int, byte: Int)
+    // The first character encodes a value above 7, so the text names
+    // more than 128 bits.  Twenty-six base-32 digits carry 130 bits and
+    // a ULID is 128, so the top two bits of the first digit MUST be
+    // zero — and `8ZZZZZZZZZZZZZZZZZZZZZZZZZ` is a string that parses
+    // digit by digit and is not a ULID.  Almost every implementation
+    // silently truncates it, which makes two different strings decode
+    // to the same value.
+    UlidTextOverflow(first_byte: Int)
+    // A timestamp does not fit in 48 bits.  The value is named; the
+    // ceiling is `ulid.max_timestamp_ms()`, which is 10889-08-02.
+    UlidTimestampOverflow(unix_ms: Int)
+    // A monotonic step was asked for in a millisecond that has already
+    // used all 2^80 of its random values.  Unreachable in practice and
+    // named anyway, because the alternative is wrapping to a value the
+    // sequence already issued.
+    UlidMonotonicExhausted(unix_ms: Int)
+    // The clock went backwards: the millisecond offered is earlier than
+    // the one the sequence last issued.  Both are named.
+    //
+    // This is a REFUSAL and not a correction, because the two
+    // corrections are both worse: reusing the last timestamp makes the
+    // identifier lie about when it was made, and accepting the earlier
+    // one breaks the sort that is the whole point of the format.  A
+    // caller that would rather carry on calls `ulidseq.next_relaxed`,
+    // where the choice is visible at the call site.
+    UlidClockWentBackwards(last_ms: Int, offered_ms: Int)
+
+// The sentence a `Result<_, UlidFault>` carries.
+//
+// SPEC § 3.4 admits a type as a `Result`'s error type only when it
+// implements `Error`, so this impl is what lets every function in the
+// package name its own refusal instead of returning `Result<_, Str>`
+// and losing the variant a caller wanted to match on.
+//
+// ```novo
+// use uliderr
+//
+// fn main() [io]
+//     println(uliderr.fault_message(UlidBadDigit(4, 85)))
+// ```
+impl Error for UlidFault
+    // Panics with `not implemented` until the bodies land.
+    fn message(self) -> Str
+        todo("ulid-nv.uliderr.UlidFault.message")
+
+// The same sentence as a free function, for a caller holding a fault
+// it is not returning.
+//
+// ```novo
+// use uliderr
+//
+// fn main() [io]
+//     println(uliderr.fault_message(UlidTextOverflow(56)))
+// ```
+pub @tier(app)
+fn fault_message(f: UlidFault) -> Str []
+    todo("ulid-nv.uliderr.fault_message")
+
+// The character index a text fault is about, or `-1` for a fault that
+// is not about text.
+//
+// So a caller can underline the character rather than reprint the
+// string.
+//
+// ```novo
+// use uliderr
+//
+// fn main() [io]
+//     println("${uliderr.index_of(UlidBadDigit(4, 85))}")
+// ```
+pub fn index_of(f: UlidFault) -> Int []
+    todo("ulid-nv.uliderr.index_of")
+
+// True when the fault is about the TEXT rather than about time.
+//
+// The two have different callers: a parse failure is somebody else's
+// input and a clock failure is this machine's, and a service that
+// counted them together would not be able to tell a bad request from a
+// broken host.
+//
+// ```novo
+// use uliderr
+//
+// fn main() [io]
+//     let text_fault = uliderr.is_text_fault(UlidBadLength(25))
+//     println("${text_fault}")
+// ```
+pub fn is_text_fault(f: UlidFault) -> Bool []
+    todo("ulid-nv.uliderr.is_text_fault")

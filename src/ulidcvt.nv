@@ -1,0 +1,215 @@
+// ulidcvt.nv — the UUID bridge, and the six bits it costs.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// A ULID AND A UUID ARE THE SAME SIXTEEN BYTES, AND THAT IS THE TRAP.
+// Both are 128 bits big-endian, so `ulid.to_bytes(u)` is a value
+// `uuid.from_bytes` accepts without complaint.  What comes back is NOT
+// a conforming UUID of any version: RFC 9562 spends four bits on a
+// version nibble and two on a variant, and in a ULID those six bits are
+// entropy.  So a ULID handed to a UUID type reads back with a random
+// version — `version()` answers whatever the generator drew, and
+// `variant()` is wrong five times in eight.
+//
+// Nothing warns about this.  The value round-trips, the string looks
+// like a UUID, and a service that validates versions rejects five
+// sevenths of them for reasons nobody can reproduce.
+//
+// SO THERE ARE TWO CONVERSIONS AND THEY ARE NOT THE SAME FUNCTION.
+//
+//   `to_uuid_bytes`    — the sixteen bytes, unchanged.  Use it when
+//                        the other side stores 128 bits and does not
+//                        inspect them.  LOSSLESS both ways.
+//
+//   `to_uuidv7_bytes`  — the sixteen bytes with the version nibble set
+//                        to 7 and the variant to `10`, which makes a
+//                        CONFORMING UUIDv7 carrying the same
+//                        millisecond.  Costs six bits of entropy and
+//                        is NOT reversible: `of_uuid_bytes` of the
+//                        result is a different ULID.  `is_lossless`
+//                        says so before the fact.
+//
+// WHY UUIDv7 AND NOT SOME OTHER VERSION.  Because UUIDv7 has the same
+// shape: a 48-bit millisecond since the Unix epoch at the top, then
+// randomness.  A ULID and a UUIDv7 minted in the same millisecond sort
+// together, and the timestamp survives the conversion in both
+// directions.  That is not true of v4 (no timestamp) or v1 (a
+// different epoch and a different byte order), and this module offers
+// neither.
+//
+// WHY THIS PACKAGE DOES NOT DEPEND ON uuid-nv.  uuid-nv is `host` —
+// its `v4` and `v7` read the entropy source and the clock — and this
+// package is `core`, so the dependency is refused by the layer rule and
+// would have been the wrong trade even if it were not: a firmware
+// consumer that never speaks UUID would download a generator it cannot
+// link.  The bridge is sixteen bytes, both packages already speak
+// them, and a caller holding both writes one line.
+
+use ulid
+use uliderr
+
+// The sixteen bytes, unchanged: the same value `ulid.to_bytes` gives.
+//
+// Named separately so a call site says which conversion it meant.
+// `uuid.from_bytes(ulidcvt.to_uuid_bytes(u))` is the whole bridge, and
+// the reader of that line can see that no version was stamped.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+// use std.bytes
+//
+// fn main() [io]
+//     println("${bytes.len(ulidcvt.to_uuid_bytes(ulid.max()))}")
+// ```
+pub fn to_uuid_bytes(u: Ulid) -> Bytes []
+    todo("ulid-nv.ulidcvt.to_uuid_bytes")
+
+// A ULID from a UUID's sixteen bytes, whatever version it claims.
+//
+// LOSSLESS: every 128-bit value is a legal ULID.  Whether the
+// timestamp means anything depends on the version the bytes came from
+// — `timestamp_is_meaningful` is the predicate for that, and a v4's
+// top 48 bits are noise.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+//
+// fn main() [io]
+//     match ulidcvt.of_uuid_bytes(ulidcvt.to_uuid_bytes(ulid.max()))
+//         Some(u) => println("${ulid.timestamp_ms(u)}")
+//         None    => println("not sixteen bytes")
+// ```
+pub fn of_uuid_bytes(b: Bytes) -> ?Ulid []
+    todo("ulid-nv.ulidcvt.of_uuid_bytes")
+
+// The sixteen bytes of a CONFORMING UUIDv7 carrying this ULID's
+// millisecond.
+//
+// The version nibble becomes 7 and the variant bits become `10`, which
+// overwrites six of the eighty random bits.  The result is a UUID that
+// every RFC 9562 reader accepts and whose timestamp is this ULID's.
+//
+// NOT REVERSIBLE.  `of_uuid_bytes` of this answer is a ULID whose
+// randomness differs from the original's in those six bits.  The
+// timestamp survives; the identity does not.  A store that keeps both
+// forms of the same record keeps two different identifiers, and this
+// paragraph is why the two conversions are two functions.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+// use std.bytes
+//
+// fn main() [io]
+//     println("${bytes.len(ulidcvt.to_uuidv7_bytes(ulid.max()))}")
+// ```
+pub fn to_uuidv7_bytes(u: Ulid) -> Bytes []
+    todo("ulid-nv.ulidcvt.to_uuidv7_bytes")
+
+// A ULID from a UUIDv7's bytes, refusing anything that is not a v7.
+//
+// `UlidBadLength` when there are not sixteen bytes.  A UUID of another
+// version is `UlidBadDigit` naming the byte that carries the version
+// nibble — the strictness is the point: a v4 converted here would
+// answer a ULID whose timestamp is 48 bits of noise, sorted somewhere
+// in the year 5000 or 1974.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+//
+// fn main() [io]
+//     match ulidcvt.of_uuidv7_bytes(ulidcvt.to_uuidv7_bytes(ulid.nil()))
+//         Ok(u)  => println("${ulid.timestamp_ms(u)}")
+//         Err(f) => println(f.message())
+// ```
+pub fn of_uuidv7_bytes(b: Bytes) -> Result<Ulid, uliderr.UlidFault> []
+    todo("ulid-nv.ulidcvt.of_uuidv7_bytes")
+
+// The version nibble sixteen bytes carry, 0..15.
+//
+// `-1` when there are not sixteen bytes.  What tells a caller whether
+// `of_uuid_bytes`'s timestamp means anything, without a UUID library.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+//
+// fn main() [io]
+//     println("${ulidcvt.uuid_version(ulidcvt.to_uuidv7_bytes(ulid.nil()))}")
+// ```
+pub fn uuid_version(b: Bytes) -> Int []
+    todo("ulid-nv.ulidcvt.uuid_version")
+
+// True when a UUID's version puts a Unix millisecond in its top 48
+// bits — which is version 7, and only version 7.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+//
+// fn main() [io]
+//     let ok = ulidcvt.timestamp_is_meaningful(ulidcvt.to_uuidv7_bytes(ulid.nil()))
+//     println("${ok}")
+// ```
+pub fn timestamp_is_meaningful(b: Bytes) -> Bool []
+    todo("ulid-nv.ulidcvt.timestamp_is_meaningful")
+
+// True when `to_uuidv7_bytes` would change nothing — the six bits
+// already hold 7 and `10`.
+//
+// One ULID in 64 satisfies it by chance.  The predicate exists so a
+// migration can count how many of its identifiers survive the
+// conversion unchanged rather than assume none do, and so a test can
+// assert the arithmetic.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+//
+// fn main() [io]
+//     let same = ulidcvt.is_lossless(ulid.nil())
+//     println("${same}")
+// ```
+pub fn is_lossless(u: Ulid) -> Bool []
+    todo("ulid-nv.ulidcvt.is_lossless")
+
+// The canonical hyphenated UUID text — `8-4-4-4-12` lower-case hex —
+// for this ULID's bytes.
+//
+// The other spelling the same 128 bits have, for a system that stores
+// identifiers as `uuid` columns and reads them as text.  Note that this
+// is NOT the ULID's own text form: `ulidtext.encode` is 26 Crockford
+// characters and sorts chronologically; this is 36 characters of hex
+// and sorts chronologically too, because the timestamp is still at the
+// top.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+//
+// fn main() [io]
+//     println(ulidcvt.to_uuid_text(ulid.nil()))
+// ```
+pub fn to_uuid_text(u: Ulid) -> Str []
+    todo("ulid-nv.ulidcvt.to_uuid_text")
+
+// A ULID from hyphenated or unhyphenated UUID text, either case.
+//
+// `UlidBadLength` for anything that is not 32 or 36 characters;
+// `UlidBadDigit` naming the index of the first character that is not
+// hexadecimal or a hyphen in the wrong place.
+//
+// ```novo
+// use ulid
+// use ulidcvt
+//
+// fn main() [io]
+//     match ulidcvt.of_uuid_text("0192f1b2-c3d4-7000-8000-000000000001")
+//         Ok(u)  => println("${ulid.timestamp_ms(u)}")
+//         Err(f) => println(f.message())
+// ```
+pub fn of_uuid_text(text: Str) -> Result<Ulid, uliderr.UlidFault> []
+    todo("ulid-nv.ulidcvt.of_uuid_text")

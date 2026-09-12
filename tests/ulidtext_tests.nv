@@ -1,0 +1,211 @@
+// ulidtext_tests.nv — Crockford base32, with the specification's own
+// vectors and the three rules people skip.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: ulid-nv.<module>.<fn>`.
+// That is the expected result until the bodies land.
+//
+// THE VECTOR EVERY ULID IMPLEMENTATION USES is
+// `01ARZ3NDEKTSV4RRFFQ69G5FAV`, which is the specification's own
+// example.  Its timestamp is 1469918176385 — 2016-07-30T23:36:16.385Z —
+// and its randomness is what the rest of the characters carry.  Every
+// port that claims to be a port is checked against that string, and so
+// is this one.
+
+use std.test
+use std.str
+use std.bytes
+use ulid
+use ulidtext
+use uliderr
+
+@test
+fn test_the_specifications_own_vector() [io]
+    match ulidtext.parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        Err(_) => test.assert(false)
+        Ok(u)  =>
+            test.case("the timestamp is 2016-07-30T23:36:16.385Z")
+            test.assert(ulid.timestamp_ms(u) == 1469918176385)
+
+            test.case("and it round-trips to exactly the same 26 characters")
+            test.assert(ulidtext.encode(u) == "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+
+@test
+fn test_the_alphabet_is_crockfords_and_it_is_ordered() [io]
+    // Ordered is the whole reason the text sorts like the bits.  An
+    // implementation that used RFC 4648's alphabet would produce
+    // identifiers that sort WRONG, and nothing about them would look
+    // wrong.
+    test.case("thirty-two characters, I L O and U left out")
+    test.assert(ulidtext.alphabet() == "0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+
+    test.case("value 0 is the digit zero")
+    test.assert(ulidtext.digit_byte(0) == 48)
+
+    test.case("value 31 is Z")
+    test.assert(ulidtext.digit_byte(31) == 90)
+
+    test.case("value 10 is A, which is where the letters start")
+    test.assert(ulidtext.digit_byte(10) == 65)
+
+@test
+fn test_the_two_boundary_values() [io]
+    test.case("the all-zero ULID is twenty-six zeros")
+    test.assert(ulidtext.encode(ulid.nil()) == "00000000000000000000000000")
+
+    test.case("the all-ones ULID is 7 then twenty-five Zs")
+    test.assert(ulidtext.encode(ulid.max()) == "7ZZZZZZZZZZZZZZZZZZZZZZZZZ")
+
+    test.case("and NOT a leading Z — the top two bits of the first digit are the padding")
+    test.assert(str.starts_with(ulidtext.encode(ulid.max()), "7"))
+
+@test
+fn test_the_first_character_cannot_exceed_seven() [io]
+    // Twenty-six base-32 digits carry 130 bits and a ULID is 128.  Most
+    // implementations truncate, which makes `8ZZZ…` and `0ZZZ…` decode
+    // to values that collide — two distinct primary keys that are equal.
+    test.case("a leading 8 is refused")
+    match ulidtext.parse("8ZZZZZZZZZZZZZZZZZZZZZZZZZ")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.index_of(f) == 0)
+
+    test.case("a leading Z is refused")
+    match ulidtext.parse("ZZZZZZZZZZZZZZZZZZZZZZZZZZ")
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
+
+    test.case("and 7 is accepted, because it is the largest that fits")
+    test.assert(ulidtext.is_valid("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"))
+
+@test
+fn test_decoding_is_forgiving_and_encoding_is_not() [io]
+    // A ULID gets read off a screen and typed back in, so the rules
+    // exist; the encoder has exactly one spelling, so the identifier a
+    // program writes is stable.
+    test.case("lower case parses")
+    test.assert(ulidtext.is_valid("01arz3ndektsv4rrffq69g5fav"))
+
+    test.case("and canonicalises to upper case")
+    match ulidtext.canonical("01arz3ndektsv4rrffq69g5fav")
+        Ok(s)  => test.assert(s == "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        Err(_) => test.assert(false)
+
+    test.case("I, i, L and l all mean 1")
+    test.assert(ulidtext.digit_value(73) == 1)
+    test.assert(ulidtext.digit_value(105) == 1)
+    test.assert(ulidtext.digit_value(76) == 1)
+    test.assert(ulidtext.digit_value(108) == 1)
+
+    test.case("O and o mean 0")
+    test.assert(ulidtext.digit_value(79) == 0)
+    test.assert(ulidtext.digit_value(111) == 0)
+
+    test.case("U is NOT an alias — it is excluded on purpose and stays excluded")
+    test.assert(ulidtext.digit_value(85) == 0 - 1)
+    test.assert(ulidtext.digit_value(117) == 0 - 1)
+
+    test.case("so a U in the text is a named refusal at its own index")
+    match ulidtext.parse("01ARZ3NDEKUSV4RRFFQ69G5FAV")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.index_of(f) == 10)
+
+@test
+fn test_a_wrong_length_says_what_it_found() [io]
+    test.case("too short")
+    match ulidtext.parse("01ARZ3NDEKTSV4RRFFQ69G5FA")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(str.contains(f.message(), "25"))
+
+    test.case("too long")
+    match ulidtext.parse("01ARZ3NDEKTSV4RRFFQ69G5FAVV")
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
+
+    test.case("empty")
+    test.assert(ulidtext.is_valid("") == false)
+
+    test.case("and the free-function form of the message says the same thing")
+    match ulidtext.parse("")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.fault_message(f) == f.message())
+
+@test
+fn test_the_text_sorts_the_way_the_bits_sort() [io]
+    // This is the property the whole format exists for, and the reason
+    // the alphabet must be Crockford's.
+    let early = ulid.of_parts(1469918176385, 0, 0)
+    let late = ulid.of_parts(1469918176386, 0, 0)
+
+    test.case("an earlier millisecond sorts first as bits")
+    test.assert(ulid.cmp(early, late) == 0 - 1)
+
+    test.case("and first as text, by an ordinary byte comparison")
+    test.assert(ulidtext.compare_text(ulidtext.encode(early), ulidtext.encode(late)) == 0 - 1)
+
+    test.case("within one millisecond the entropy breaks the tie, the same way in both")
+    let a = ulid.of_parts(1469918176385, 0, 1)
+    let b = ulid.of_parts(1469918176385, 0, 2)
+    test.assert(ulid.cmp(a, b) == 0 - 1)
+    test.assert(ulidtext.compare_text(ulidtext.encode(a), ulidtext.encode(b)) == 0 - 1)
+
+@test
+fn test_the_character_function_is_the_encoder() [io]
+    // `encode` is `char_at` in a loop; asserting that they agree is what
+    // stops the two drifting, and `char_at` is the one firmware calls.
+    let u = ulid.of_parts(1469918176385, 0xBEEF, 0x0123456789ABCDEF)
+
+    test.case("the first character")
+    test.assert(ulidtext.char_at(u, 0) == 48)
+
+    test.case("every character of nil is the digit zero")
+    test.assert(ulidtext.char_at(ulid.nil(), 25) == 48)
+
+    test.case("an index past the end answers 0 rather than reading off the end")
+    test.assert(ulidtext.char_at(u, 26) == 0)
+    test.assert(ulidtext.char_at(u, 0 - 1) == 0)
+
+@test
+fn test_the_timestamp_prefix_is_the_first_ten_characters() [io]
+    let u = ulid.of_parts(1469918176385, 0, 0)
+
+    test.case("ten characters")
+    test.assert(ulidtext.encode_timestamp(u).len() == 10)
+
+    test.case("and they are the first ten of the whole form")
+    test.assert(str.starts_with(ulidtext.encode(u), ulidtext.encode_timestamp(u)))
+
+    test.case("two ULIDs from the same millisecond share it — which is what a prefix scan uses")
+    let v = ulid.of_parts(1469918176385, 0xFFFF, 0xFFFFFFFFFFFFFFFF)
+    test.assert(ulidtext.encode_timestamp(u) == ulidtext.encode_timestamp(v))
+
+@test
+fn test_writing_into_a_callers_buffer() [io]
+    test.case("twenty-six bytes are written and the offset advances by twenty-six")
+    let out = bytes.zeros(32)
+    let (buf, next) = ulidtext.encode_into(ulid.nil(), out, 0)
+    test.assert(next == 26)
+
+    test.case("a buffer with no room is refused by answering the offset unchanged")
+    let small = bytes.zeros(10)
+    let (buf2, next2) = ulidtext.encode_into(ulid.nil(), small, 0)
+    test.assert(next2 == 0)
+
+@test
+fn test_parse_or_none_is_the_same_decision_without_the_reason() [io]
+    test.case("a good one")
+    match ulidtext.parse_or_none("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        Some(u) => test.assert(ulid.timestamp_ms(u) == 1469918176385)
+        None    => test.assert(false)
+
+    test.case("a bad one")
+    match ulidtext.parse_or_none("not a ulid at all really no")
+        Some(_) => test.assert(false)
+        None    => test.assert(true)
+
+@test
+fn test_the_two_lengths_are_published_as_numbers() [io]
+    test.case("twenty-six characters")
+    test.assert(ulidtext.text_len() == 26)
+
+    test.case("ten of them carry the timestamp")
+    test.assert(ulidtext.timestamp_len() == 10)

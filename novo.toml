@@ -1,6 +1,6 @@
 [package]
 name        = "ulid-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "ULIDs: 128 bits of sortable identifier — a 48-bit millisecond timestamp then 80 random bits — whose lexicographic order over the text IS chronological order.  The value is two Ints and the text form is a FUNCTION FROM AN INDEX TO A CHARACTER, so a device emits 26 bytes with no buffer and the whole format builds for a Cortex-M.  Crockford base32 with its ambiguity rules and the first-character overflow, monotonic generation as a value the caller threads, and the UUIDv7 bridge with the six bits it costs stated.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 

@@ -1,47 +1,84 @@
 # ulid-nv
 
-**Status: NOT IMPLEMENTED — interface only.**
+A ULID is a 128-bit identifier made of a 48-bit millisecond timestamp
+followed by 80 random bits, written as 26 characters. Sorting the text
+sorts the identifiers into the order they were created. The format is
+defined by the
+[ULID specification](https://github.com/ulid/spec). This package
+implements it for novo-lang: the value, the text form, monotonic
+generation, and the bridge to UUID.
 
-Every public function below is published with its signature and its
-effect row, and every body is `todo()`.  Installing this package works;
-calling it panics with `not implemented`.
+**Status: NOT IMPLEMENTED — interface only.** Every function is declared
+with its full signature, but every body is a `todo()` that panics when
+called. The package is published so its design can be reviewed and
+depended on before it is implemented. Version 0.1.0 will be the first
+working release.
 
-## What this is
+## What a ULID is
 
-ULIDs for novo-lang: 128 bits of identifier — a 48-bit millisecond
-timestamp then 80 random bits — whose **lexicographic order over the
-text is chronological order**.  A `char(26)` primary key gets you rows
-in creation order out of an ordinary index, and files named by ULID come
-out of `ls` in the order they were made.
+The first 48 bits are the number of milliseconds since 1970, the Unix
+epoch. The remaining 80 bits are random. Because the timestamp is at the
+top and the whole value is compared as one unsigned 128-bit number, an
+identifier made later is always larger than one made earlier.
 
-- `ulid` — the value: two `Int`s, and every accessor a shift and a mask.
-- `ulidtext` — Crockford base32, as a function from an index to a
-  character.
-- `ulidseq` — monotonicity, as a value the caller threads.
-- `ulidcvt` — the UUIDv7 bridge, and the six bits it costs.
-- `ulidgen` — the one module that reads a clock (`[time, rand]`).
-- `uliderr` — `UlidFault`, with the position in every variant.
+The text form is 26 characters of **Crockford base32**, an alphabet of
+`0123456789ABCDEFGHJKMNPQRSTVWXYZ`. It leaves out `I`, `L` and `O`,
+which are confusable with `1`, `1` and `0`, and `U`, so that a random
+identifier cannot spell an obscenity. The alphabet is in value order, so
+comparing two texts character by character gives the same answer as
+comparing the two 128-bit values.
+
+Two identifiers made in the same millisecond differ only in their random
+bits, so their order is random. **Monotonic generation** fixes that:
+within one millisecond, the next identifier is the previous one with its
+80 random bits incremented by one. A sequence that does this is a value
+in this package, which the caller threads from call to call.
+
+A **UUID** is also sixteen bytes, and RFC 9562 gives four of its bits to
+a version number and two to a variant. In a ULID those six bits are
+random. The two formats are therefore the same size and not the same
+thing.
+
+| Quantity | Value |
+| --- | --- |
+| Bits in a ULID | 128 |
+| Bytes in the binary form | 16 |
+| Timestamp bits | 48 |
+| Random bits | 80 |
+| Characters in the text form | 26 |
+| Characters carrying the timestamp | 10 |
+| Characters in the alphabet | 32 |
+| Highest millisecond a timestamp holds | 281474976710655, which is 10889-08-02 |
+| Highest value of the first character | `7` |
+| Identifiers one millisecond can issue monotonically | 2^80 |
+| Chance a ULID is already a valid UUIDv7 | one in 64 |
+
+## Install
 
 ```
 novo pkg add ulid-nv
-novo pkg build
-novo test
 ```
 
-## The one example that will work
+## Example
 
-```novo ignore
+```novo
+use ulid
 use ulidgen
 use ulidseq
 use ulidtext
 
 fn main() [io, time, rand]
-    // One sortable identifier.
+    // One identifier, from the clock and the entropy source.
     match ulidgen.new()
         Err(f) => println(f.message())
-        Ok(u)  => println(ulidtext.encode(u))    // 01ARZ3NDEKTSV4RRFFQ69G5FAV
+        Ok(u)  =>
+            // The 26-character text form, such as 01ARZ3NDEKTSV4RRFFQ69G5FAV.
+            println(ulidtext.encode(u))
+            // The millisecond it was made in.
+            println("${ulid.timestamp_ms(u)}")
 
-    // Four of them, in the order they were issued, from one clock read.
+    // Four identifiers that sort in the order they were issued, even
+    // when the clock does not move between them.
     match ulidgen.batch(ulidseq.empty(), 4)
         Err(f)      => println(f.message())
         Ok((_, us)) =>
@@ -49,213 +86,202 @@ fn main() [io, time, rand]
                 println(ulidtext.encode(u))
 ```
 
-## The load-bearing interface: the text form is a function from an index to a character
+Build and test with `novo pkg build` and `novo test`. Today `novo test`
+fails on purpose: every test reaches a `not implemented: ulid-nv.<fn>`
+panic. The tests are the specification the implementation will have to
+satisfy.
 
-```novo ignore
-pub @tier(embedded)
-fn char_at(u: Ulid, index: Int) -> Int []
+## What the package contains
 
-pub @tier(embedded)
-fn byte_at(u: Ulid, index: Int) -> Int []
+| Module | Contents |
+| --- | --- |
+| `ulid` | The value as two integers, the field accessors, the sizes and the ceiling, the binary form, the unsigned comparison, and the two range bounds for a timestamp. |
+| `ulidtext` | Crockford base32: the alphabet, one character at an index, the whole text, the timestamp prefix, parsing with its three refusals, and the comparison over text. |
+| `ulidseq` | Monotonic generation as a value: the next identifier in a millisecond, the strict and relaxed answers to a backwards clock, and how many identifiers a millisecond has left. |
+| `ulidcvt` | The UUID bridge: the lossless conversion, the UUIDv7 conversion that overwrites six bits, and the questions a caller asks before choosing one. |
+| `ulidgen` | The only module that reads a clock or an entropy source. One identifier, a batch, and the two readings on their own. |
+| `uliderr` | The six refusals, each naming its position or its value, and the accessors that pull those out. |
+
+## How to choose an entry point
+
+**`ulidgen.new` mints one identifier.** It reads the clock and the
+entropy source, which is why it is the only module with effects.
+
+**`ulidgen.next_in` and `ulidgen.batch` mint monotonic ones.** They take
+a sequence value and answer the sequence that follows. Reach for them
+when a run of identifiers must sort in the order it was issued.
+
+**`ulidseq.next` is the same step with the clock and the entropy as
+arguments.** It reads nothing, so it runs on a device and it is testable
+with plain numbers.
+
+**`ulidtext.parse` and `ulidtext.encode` are the text form on a host.**
+
+**`ulidtext.char_at` and `ulid.byte_at` are the primitives.** Each
+answers one character or one byte of an identifier at an index, with no
+buffer and no allocation. Firmware writes an identifier with a bounded
+loop over 26 indexes. See "Running on a microcontroller".
+
+## The rules a user needs
+
+1. **The first character cannot exceed `7`.** Twenty-six base-32 digits
+   carry 130 bits and a ULID is 128, so the top two bits of the first
+   digit must be zero. `8ZZZZZZZZZZZZZZZZZZZZZZZZZ` reads digit by
+   digit and is not a ULID. `ulidtext.parse` answers
+   `UlidTextOverflow`; an implementation that truncates instead makes
+   two different strings decode to one value.
+2. **Decoding applies Crockford's ambiguity rules and encoding does
+   not.** `i`, `I`, `l` and `L` read as 1, and `o` and `O` read as 0,
+   because an identifier gets read off a screen and typed back in.
+   Encoding produces upper case, no alias, always 26 characters.
+   `ulidtext.canonical` is what a unique index needs, because two
+   spellings are one identifier and a `char(26)` column does not know
+   that.
+3. **`U` is not an alias for anything.** It is left out of the alphabet
+   on purpose, so `U` in a text is `UlidBadDigit` naming its index.
+4. **The comparison is unsigned over 128 bits held in two signed
+   integers.** Use `ulid.cmp` and `ulid.eq`. There are no operator
+   implementations, because a signed comparison would put the newest
+   records first with nothing else looking wrong.
+5. **A backwards clock is refused.** `ulidseq.next` answers
+   `UlidClockWentBackwards` naming both milliseconds. Network time
+   corrections step and virtual machines resume, and both repairs are
+   worse than the refusal: reusing the last millisecond makes the
+   identifier lie about when it was made, and accepting the earlier one
+   breaks the sort. `ulidseq.next_relaxed` carries on, and the name
+   says so at the call site.
+6. **A monotonic step inside a millisecond ignores the entropy it is
+   offered.** It increments the previous identifier's 80 random bits by
+   one, with a carry between the two halves. A new millisecond takes the
+   entropy.
+7. **Monotonic identifiers are guessable.** Someone holding one can
+   compute the next. That is why monotonicity is a call a caller makes
+   rather than what `ulidgen.new` does.
+8. **A ULID is not a secret.** It carries its creation time in plain
+   sight. An unguessable token comes from a cryptographic random source,
+   which is [crypto-nv](https://novo-lang.org/packages/crypto-nv)'s and
+   [rand-nv](https://novo-lang.org/packages/rand-nv)'s business.
+9. **A ULID's sixteen bytes are not a conforming UUID.**
+   `ulidcvt.to_uuid_bytes` is lossless and the result has no valid
+   version nibble. `ulidcvt.to_uuidv7_bytes` overwrites six bits so that
+   a UUID reader sees version 7 and reads the timestamp, and that
+   conversion does not come back. `ulidcvt.is_lossless` answers
+   beforehand whether a particular identifier's six bits already hold
+   the right values, which one in sixty-four does.
+10. **UUIDv7 is the only version offered.** RFC 9562 section 5.7 gives
+    it the same shape: 48 bits of Unix millisecond, then randomness. A
+    ULID and a UUIDv7 made in the same millisecond sort together.
+11. **A timestamp above 2^48 - 1 is refused.**
+    `ulid.of_parts_checked` answers `UlidTimestampOverflow` and
+    `ulid.of_parts` masks. Two functions rather than one argument.
+12. **A prefix range scan uses the first ten characters.**
+    `ulidtext.encode_timestamp` answers them, and `ulid.floor_of` and
+    `ulid.ceiling_of` are the two bounds of one millisecond.
+
+## Running on a microcontroller
+
+novo-lang lets a package state which of its modules can run on a device
+with no heap allocator, and the compiler checks that claim on every
+build. Here the claim covers every module except `ulidgen`, and it
+covers the functions in them that take and answer integers. The manifest
+names the exception with `host_modules = ["ulidgen"]`.
+
+`tests/embedded_probe.nv` is that claim as a program that either builds
+or does not. It builds today:
+
+```bash
+novo build --target=nrf52-qemu tests/embedded_probe.nv
 ```
 
-Every other ULID library's encoder is `fn encode(u) -> String`: it
-allocates twenty-six bytes, fills them, and hands them over.  That
-function is here too — `ulidtext.encode` — and it is a convenience.  It
-is not the primitive, because it cannot be:
+The probe produces a Cortex-M4 executable that reads the field layout,
+runs the unsigned comparison, applies Crockford's ambiguity rules and
+steps the monotonic carry. It builds and it is not run: every function
+it calls is a `todo()` today.
 
-- **the embedded runtime has no allocator**, so a `Bytes` or a `Str` is
-  not something firmware can be handed;
-- a caller writing into a fixed-width record does not want a second
-  buffer to copy out of;
-- and a caller emitting onto a UART wants one byte at a time.
+What a device can therefore do is build an identifier from a real-time
+clock's millisecond and a hardware entropy source's bits, hold it,
+compare it, step it, and write it out one character at a time through
+`ulidtext.char_at`. What it cannot do is parse one out of a string or
+allocate the 26-byte text, because those need `Str` and `Bytes`, which
+the embedded runtime does not define.
 
-So the primitive is `char_at(u, i)`: a shift, a mask and a table lookup.
-Firmware writes a ULID with a bounded `for` over `0..26` and the heap is
-untouched.  `ulid.byte_at` is the same inversion for the binary form,
-and `encode` and `to_bytes` are those two loops written once for a host
-that has an allocator.
+## What is not included
 
-`tests/embedded_probe.nv` builds for `--target=nrf52-qemu` and proves
-it: the layout, the unsigned comparison, Crockford's ambiguity rules and
-the monotonic carry all link on a Cortex-M4, with `ulidgen` left out by
-the manifest's `host_modules`.  What a device can therefore do is build
-an identifier from a real-time clock's millisecond and a hardware
-entropy source's bits, hold it, compare it, step it, and write it out
-one character at a time.  What it cannot do is parse one out of a
-string; that stays the host's.
+- **A generator inside the `core` modules.** Entropy arrives as two
+  integer arguments and the millisecond as one more. `ulidgen` is the
+  one module that reads them for you, and a device supplies its own.
+- **A dependency on [uuid-nv](https://novo-lang.org/packages/uuid-nv).**
+  That package is a host package and this one is not, so the bridge is
+  the sixteen bytes both already speak.
+- **Operator implementations for ordering and equality.** See rule 4.
+- **Date formatting.** `ulid.timestamp_ms` answers a number. Turning it
+  into a date is
+  [calendar-nv](https://novo-lang.org/packages/calendar-nv)'s and
+  [chrono-nv](https://novo-lang.org/packages/chrono-nv)'s work.
+- **Other ULID-like formats.** No alternative entropy sizes, no 48-bit
+  variants, no base57. One format.
+- **A hidden global sequence.** A sequence is a value, so two shards
+  keep one each and they do not contend.
 
-### The value is two `Int`s, and it is boxed on purpose
+## Related packages
 
-```novo ignore
-pub struct Ulid
-    hi: Int    // 48-bit timestamp, then the top 16 random bits
-    lo: Int    // the low 64 random bits
+- [uuid-nv](https://novo-lang.org/packages/uuid-nv) is UUIDs, including
+  version 7, which is the version with a millisecond timestamp at the
+  top. Reach for it when something else in the system requires a UUID.
+- [rand-nv](https://novo-lang.org/packages/rand-nv) is the random number
+  generator a caller draws the 80 bits from when it is not using
+  `ulidgen`.
+- [base64-nv](https://novo-lang.org/packages/base64-nv) and
+  [bech32-nv](https://novo-lang.org/packages/bech32-nv) are the other
+  text encodings of binary values. Neither has an ordering guarantee.
+- [calendar-nv](https://novo-lang.org/packages/calendar-nv) turns the
+  millisecond this package answers into a civil date.
+
+## Tests
+
+```bash
+novo test tests/ulid_tests.nv         # 17 tests: the value and the sequence
+novo test tests/ulidtext_tests.nv     # 12 tests: Crockford base32
+novo test tests/ulidcvt_tests.nv      #  9 tests: the UUID bridge and the generator
 ```
 
-`Ulid` is **not** `@value`.  SPEC § 14.5 keeps an unboxed struct out of a
-`Result` payload, an optional, a tuple, an enum payload and a boxed
-field — and a ULID occupies the first three: every parse returns
-`Result<Ulid, UlidFault>`, `parse_or_none` returns `?Ulid`, and every
-monotonic step returns `(UlidSeq, Ulid)`.  color-nv made the same call
-for the same reason.  A boxed two-`Int` struct in all three positions
-was measured on a Cortex-M4 before the claim was made, and it links.
-
-## Why the layer is `core` and not the `host` the plan pencilled in
-
-The plan's row said `host`, because minting a ULID reads the clock and
-the entropy source.  Measured, that is **one module**: `ulidgen`,
-`[time, rand]`, seven functions.  Everything the package actually *is* —
-the 128-bit layout, Crockford base32, the comparison, the monotonic
-increment, the UUID bridge — is integer arithmetic over values the
-caller already holds.
-
-So the manifest declares the narrow layer and names the wide module:
-
-```toml
-layer        = "core"
-host_modules = ["ulidgen"]
-```
-
-Three things follow.  A consumer that only *parses* identifiers arriving
-over a wire — which is most services — is charged nothing.  The embedded
-probe is built without `ulidgen`, so the device claim is about the part
-that can honestly make it.  And `ulidseq` can exist at all: a hidden
-global sequence would need `[mutate]` on every row and the whole package
-would be `host`.
-
-**The narrowing costs one dependency**, and it is the right one to lose:
-uuid-nv is `host`, a `core` package may not depend on it, so `ulidcvt`
-bridges through sixteen bytes instead — which is the better shape
-anyway, because the sixteen bytes *are* the UUID.
-
-## The three rules implementations skip
-
-**The first character cannot exceed `7`.**  Twenty-six base-32 digits
-carry 130 bits and a ULID is 128, so the top two bits of the first digit
-must be zero.  `8ZZZZZZZZZZZZZZZZZZZZZZZZZ` parses digit by digit and is
-not a ULID; most implementations truncate it silently, which makes it
-and `0ZZZ…` decode to the same value — two distinct primary keys that
-compare equal.  `parse` answers `UlidTextOverflow`.
-
-**`U` is not an alias.**  Crockford's alphabet leaves out `I`, `L`, `O`
-and `U`: the first three because they are confusable with `1`, `1` and
-`0`, and `U` so a random identifier cannot spell an obscenity.  So
-decoding maps `i`/`I`/`l`/`L` to 1 and `o`/`O` to 0 — a ULID gets read
-off a screen and typed back in — and `U` is `UlidBadDigit` naming its
-index, because the whole point of excluding it is that it is not
-supposed to appear.
-
-**Encoding has exactly one spelling.**  Upper case, never an alias,
-always 26 characters.  `canonical` is what a unique index needs, because
-two spellings of the same identifier are the same identifier and
-`char(26)` does not know that.
-
-## Monotonicity is a value, and a backwards clock is a refusal
-
-Two ULIDs minted in the same millisecond are ordered by their *entropy*,
-which is to say randomly — so a batch insert of a thousand rows in four
-milliseconds comes out shuffled in blocks of two hundred and fifty.  The
-specification's answer is to increment inside a millisecond, and
-`ulidseq` is that, as a value:
-
-```novo ignore
-pub fn next(s: UlidSeq, unix_ms: Int, random_hi16: Int,
-            random_lo64: Int) -> Result<(UlidSeq, Ulid), UlidFault> []
-```
-
-The clock is an **argument**, so the whole of monotonicity — the
-increment, the carry between the two halves, the overflow, the backwards
-clock — is tested by calling it with numbers, and `ulidgen` is the only
-thing that needs a clock at all.  Two independent sequences are two
-values, so a service sharding by tenant keeps one each and they do not
-contend.
-
-It costs one thing, and the cost is why it is opt-in rather than what
-`new` does: an attacker holding one identifier can guess the next.
-
-**A backwards clock answers `UlidClockWentBackwards` naming both
-milliseconds.**  NTP steps and virtual machines resume.  Both
-corrections are worse than the refusal — reusing the last timestamp
-makes the identifier lie about when it was made, and accepting the
-earlier one breaks the sort that is the whole point — so the refusal is
-the default and `next_relaxed` is the other choice, spelled at the call
-site.
-
-## The UUID bridge, and the six bits it costs
-
-A ULID and a UUID are the same sixteen bytes, and that is the trap.
-`ulid.to_bytes(u)` is a value `uuid.from_bytes` accepts without
-complaint; what comes back is **not** a conforming UUID of any version,
-because RFC 9562 spends four bits on a version nibble and two on a
-variant and in a ULID those six bits are entropy.  Nothing warns about
-it: the value round-trips, the string looks like a UUID, and a service
-that validates versions rejects five sevenths of them.
-
-So there are two conversions and they are not the same function:
-
-| | lossless | timestamp readable by a UUID reader |
-| --- | --- | --- |
-| `to_uuid_bytes` | yes, both ways | no — the version nibble is noise |
-| `to_uuidv7_bytes` | **no** — six bits overwritten | yes |
-
-`is_lossless(u)` answers beforehand whether a particular ULID's six bits
-already hold 7 and `10` — one in sixty-four does — so a migration can
-count rather than assume.  UUIDv7 is the only version offered because it
-is the only one with the same shape: 48 bits of Unix millisecond at the
-top, then randomness, so a ULID and a UUIDv7 minted in the same
-millisecond sort together.
-
-## The layer, and why
-
-`core`, with `host_modules = ["ulidgen"]`.  Every row outside that one
-module is `[]`; `ulidgen`'s rows are `[time]`, `[rand]` and
-`[time, rand]` and nothing else.  No dependencies: uuid-nv for the
-reason above, and rand-nv because a package whose whole value is that it
-costs nothing should not make an embedded consumer download a generator
-it cannot link — entropy arrives as two `Int` arguments.
-
-**A ULID is not a capability.**  It carries its creation time in plain
-sight, so anybody holding one knows when the record was made, and a
-monotonic one tells them what the next one is.  An unguessable token is
-crypto-nv's business.
-
-## What it does not do
-
-- **No `Ord`/`Eq` trait impls** — `cmp` and `eq` are functions.  The
-  comparison is *unsigned* over 128 bits stored in two signed `Int`s,
-  and an operator that silently did the signed thing would put the
-  newest records first with nothing else looking wrong.
-- **No time formatting.**  `timestamp_ms` answers a number; turning it
-  into a date is calendar-nv's and chrono-nv's job.
-- **No UUID type.**  `ulidcvt` speaks bytes and text; uuid-nv owns
-  `Uuid`.
-- **No ULID-with-a-different-entropy-size**, no 48-bit variants, no
-  base57.  One format.
-
-## The reference implementation
-
-The [ULID specification](https://github.com/ulid/spec) for the layout,
-the alphabet, the monotonic rule and the vector
-`01ARZ3NDEKTSV4RRFFQ69G5FAV` that `tests/ulidtext_tests.nv` checks
-against.  Rust's [ulid](https://docs.rs/ulid) crate for the API shape.
+The reference data is the ULID specification's own, including the vector
+`01ARZ3NDEKTSV4RRFFQ69G5FAV`, together with
 [Crockford base32](https://www.crockford.com/base32.html) for the
-alphabet and the three decoding rules, which the ULID specification
-references and does not restate.  RFC 9562 § 5.7 for UUIDv7.
+alphabet and the decoding rules, and RFC 9562 section 5.7 for UUIDv7.
+The API shape follows the `ulid` crate in Rust.
 
-## Status
+The suite asserts the field layout and the published sizes, that the
+comparison is unsigned, that an earlier millisecond always sorts first,
+that the text sorts the way the bits sort, that the first character
+cannot exceed `7`, that decoding is forgiving and encoding is not, that
+the same millisecond increments rather than redrawing, that the
+increment carries across the two halves, that exhausting a millisecond
+is named rather than wrapped, that a backwards clock is refused and the
+relaxed form carries on, that a raw ULID is not a conforming UUID of any
+version, that the version 7 conversion stamps six bits and says it did,
+and that one identifier in sixty-four survives that stamp unchanged.
 
-Every body is `todo()`.  The interface is **69 `pub` items across six
-modules** — 2 structs, 1 enum and 66 functions, plus one `impl Error`:
+The tests compile today and fail at run, each on the `not implemented`
+panic that is its body. That is the expected state of an interface
+release. They turn green one at a time as bodies land.
 
-| module | surface | rows |
+## Implementation status
+
+Every function is declared and none is implemented. The interface is 69
+public items across six modules.
+
+| Module | Surface | Implemented |
 | --- | --- | --- |
-| `ulid` | 1 struct, 24 functions | `[]` |
-| `ulidtext` | 14 functions | `[]` |
-| `ulidseq` | 1 struct, 9 functions | `[]` |
-| `ulidcvt` | 9 functions | `[]` |
-| `ulidgen` | 7 functions | `[time]`, `[rand]`, `[time, rand]` |
-| `uliderr` | 1 enum, 3 functions, `impl Error for UlidFault` | `[]` |
+| `ulid` | 1 struct, 24 functions | no |
+| `ulidtext` | 14 functions | no |
+| `ulidseq` | 1 struct, 9 functions | no |
+| `ulidcvt` | 9 functions | no |
+| `ulidgen` | 7 functions | no |
+| `uliderr` | 1 enum, 3 functions, `UlidFault.message` | no |
 
-Sixty-two of the sixty-nine are `[]`; the seven that are not are one
-module, and the manifest names it.
+## Licence
+
+Apache-2.0. See `LICENSE`.
+
+<!-- docs/writing-a-readme.md is the style guide for this page. -->

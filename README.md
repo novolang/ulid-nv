@@ -8,12 +8,6 @@ defined by the
 implements it for novo-lang: the value, the text form, monotonic
 generation, and the bridge to UUID.
 
-**Status: NOT IMPLEMENTED — interface only.** Every function is declared
-with its full signature, but every body is a `todo()` that panics when
-called. The package is published so its design can be reviewed and
-depended on before it is implemented. Version 0.1.0 will be the first
-working release.
-
 ## What a ULID is
 
 The first 48 bits are the number of milliseconds since 1970, the Unix
@@ -86,10 +80,7 @@ fn main() [io, time, rand]
                 println(ulidtext.encode(u))
 ```
 
-Build and test with `novo pkg build` and `novo test`. Today `novo test`
-fails on purpose: every test reaches a `not implemented: ulid-nv.<fn>`
-panic. The tests are the specification the implementation will have to
-satisfy.
+Build and test with `novo pkg build` and `novo test`.
 
 ## What the package contains
 
@@ -195,8 +186,8 @@ novo build --target=nrf52-qemu tests/embedded_probe.nv
 
 The probe produces a Cortex-M4 executable that reads the field layout,
 runs the unsigned comparison, applies Crockford's ambiguity rules and
-steps the monotonic carry. It builds and it is not run: every function
-it calls is a `todo()` today.
+steps the monotonic carry. It builds and it is not run here: it is a
+device program, and running it is the emulator's or a board's business.
 
 What a device can therefore do is build an identifier from a real-time
 clock's millisecond and a hardware entropy source's bits, hold it,
@@ -243,6 +234,7 @@ the embedded runtime does not define.
 novo test tests/ulid_tests.nv         # 17 tests: the value and the sequence
 novo test tests/ulidtext_tests.nv     # 12 tests: Crockford base32
 novo test tests/ulidcvt_tests.nv      #  9 tests: the UUID bridge and the generator
+novo test tests/ulid_edge_tests.nv    # 11 tests: the boundaries and the refusal arms
 ```
 
 The reference data is the ULID specification's own, including the vector
@@ -261,24 +253,10 @@ is named rather than wrapped, that a backwards clock is refused and the
 relaxed form carries on, that a raw ULID is not a conforming UUID of any
 version, that the version 7 conversion stamps six bits and says it did,
 and that one identifier in sixty-four survives that stamp unchanged.
-
-The tests compile today and fail at run, each on the `not implemented`
-panic that is its body. That is the expected state of an interface
-release. They turn green one at a time as bodies land.
-
-## Implementation status
-
-Every function is declared and none is implemented. The interface is 69
-public items across six modules.
-
-| Module | Surface | Implemented |
-| --- | --- | --- |
-| `ulid` | 1 struct, 24 functions | no |
-| `ulidtext` | 14 functions | no |
-| `ulidseq` | 1 struct, 9 functions | no |
-| `ulidcvt` | 9 functions | no |
-| `ulidgen` | 7 functions | no |
-| `uliderr` | 1 enum, 3 functions, `UlidFault.message` | no |
+The edge suite covers what those leave: every fault's sentence, the two
+digit tables' ends, the comparison's negative-half ending, the text
+comparison's different-length ending, and the refusal arms a caller
+reaches only by asking for something out of range.
 
 ## Licence
 

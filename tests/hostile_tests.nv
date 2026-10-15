@@ -1,0 +1,21 @@
+// hostile_tests.nv — a write position as large as an Int allows.
+
+use std.test
+use std.bytes
+use ulid
+use ulidtext
+
+@test
+fn test_writing_at_the_largest_position_leaves_the_buffer_alone() [io]
+    let out = bytes.zeros(32)
+    test.case("a position of 2^63 - 1")
+    let (_, next) = ulidtext.encode_into(ulid.nil(), out, 9223372036854775807)
+    test.assert(next == 9223372036854775807)
+
+    test.case("a position of 2^63 - 26, where the sum with the width wraps")
+    let (_, next2) = ulidtext.encode_into(ulid.nil(), out, 9223372036854775782)
+    test.assert(next2 == 9223372036854775782)
+
+    test.case("an honest write still advances by twenty-six")
+    let (_, next3) = ulidtext.encode_into(ulid.nil(), out, 6)
+    test.assert(next3 == 32)

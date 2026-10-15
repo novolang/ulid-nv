@@ -1,8 +1,6 @@
 // uliderr.nv — everything that can go wrong, which is less than a
 // reader expects.
 //
-// Every body here is a `todo()`; the signatures are the design.
-//
 // A ULID CANNOT FAIL TO BE BUILT.  Any 128 bits are a ULID: there is no
 // version nibble to be wrong, no variant to be reserved, no checksum.
 // So `ulid.of_halves` and `ulid.of_parts` return a `Ulid` and not a
@@ -60,6 +58,35 @@ pub enum UlidFault
     // where the choice is visible at the call site.
     UlidClockWentBackwards(last_ms: Int, offered_ms: Int)
 
+// The sentence a fault turns into, in one place.
+//
+// Both `UlidFault.message` and `uliderr.fault_message` answer this, so
+// the two can never drift into telling a caller two different stories
+// about the same failure.  Interpolated rather than concatenated: a
+// `+` chain here is five allocations and the numbers are the point of
+// the message.
+fn sentence_of(f: UlidFault) -> Str []
+    // Every arm interpolates, and the concat path allocates — so the
+    // whole match sits in one `system` block and the answer leaves
+    // through `return`.  A block whose own value is the string is fine;
+    // the `return` is what a device build wants of a construction like
+    // this one.  The same shape hci-codec-nv's `message` uses.
+    system
+        let text: Str = match f
+            UlidBadLength(found)                        =>
+                "ulid: the text is ${found} characters and a ULID is 26"
+            UlidBadDigit(index, byte)                   =>
+                "ulid: byte ${byte} at index ${index} is not a Crockford base32 digit"
+            UlidTextOverflow(first_byte)                =>
+                "ulid: the first character is byte ${first_byte}, above the 7 that 128 bits allow"
+            UlidTimestampOverflow(unix_ms)              =>
+                "ulid: the millisecond ${unix_ms} does not fit in 48 bits"
+            UlidMonotonicExhausted(unix_ms)             =>
+                "ulid: the millisecond ${unix_ms} has issued all of its random values"
+            UlidClockWentBackwards(last_ms, offered_ms) =>
+                "ulid: the clock went backwards, from ${last_ms} to ${offered_ms}"
+        return text
+
 // The sentence a `Result<_, UlidFault>` carries.
 //
 // SPEC § 3.4 admits a type as a `Result`'s error type only when it
@@ -74,9 +101,8 @@ pub enum UlidFault
 //     println(uliderr.fault_message(UlidBadDigit(4, 85)))
 // ```
 impl Error for UlidFault
-    // Panics with `not implemented` until the bodies land.
     fn message(self) -> Str
-        todo("ulid-nv.uliderr.UlidFault.message")
+        sentence_of(self)
 
 // The same sentence as a free function, for a caller holding a fault
 // it is not returning.
@@ -89,7 +115,7 @@ impl Error for UlidFault
 // ```
 pub @tier(app)
 fn fault_message(f: UlidFault) -> Str []
-    todo("ulid-nv.uliderr.fault_message")
+    sentence_of(f)
 
 // The character index a text fault is about, or `-1` for a fault that
 // is not about text.
@@ -104,7 +130,10 @@ fn fault_message(f: UlidFault) -> Str []
 //     println("${uliderr.index_of(UlidBadDigit(4, 85))}")
 // ```
 pub fn index_of(f: UlidFault) -> Int []
-    todo("ulid-nv.uliderr.index_of")
+    match f
+        UlidBadDigit(index, _) => index
+        UlidTextOverflow(_)    => 0
+        _                      => -1
 
 // True when the fault is about the TEXT rather than about time.
 //
@@ -121,4 +150,8 @@ pub fn index_of(f: UlidFault) -> Int []
 //     println("${text_fault}")
 // ```
 pub fn is_text_fault(f: UlidFault) -> Bool []
-    todo("ulid-nv.uliderr.is_text_fault")
+    match f
+        UlidBadLength(_)    => true
+        UlidBadDigit(_, _)  => true
+        UlidTextOverflow(_) => true
+        _                   => false

@@ -1,8 +1,6 @@
 // ulid_tests.nv — the 128-bit layout, the unsigned comparison, and the
 // sequence.
 //
-// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
-// assertion here reaches `not implemented: ulid-nv.<module>.<fn>`.
 //
 // THE ASSERTIONS THAT MATTER ARE THE COMPARISONS.  A ULID's whole value
 // is that it sorts, and both halves live in a SIGNED `Int` — so a
@@ -60,10 +58,10 @@ fn test_the_timestamp_ceiling() [io]
     test.assert(ulid.timestamp_fits(281474976710655))
 
     test.case("one past it does not")
-    test.assert(ulid.timestamp_fits(281474976710656) == false)
+    test.assert(not ulid.timestamp_fits(281474976710656))
 
     test.case("and neither does a negative one")
-    test.assert(ulid.timestamp_fits(0 - 1) == false)
+    test.assert(not ulid.timestamp_fits(0 - 1))
 
 @test
 fn test_the_masking_constructor_and_the_refusing_one_are_two_functions() [io]
@@ -134,7 +132,7 @@ fn test_nil_is_a_legal_value_and_also_the_empty_one() [io]
     test.assert(ulid.random_lo64(ulid.nil()) == 0)
 
     test.case("max is not nil")
-    test.assert(ulid.is_nil(ulid.max()) == false)
+    test.assert(not ulid.is_nil(ulid.max()))
 
     test.case("max's timestamp is the ceiling")
     test.assert(ulid.timestamp_ms(ulid.max()) == ulid.max_timestamp_ms())
@@ -259,7 +257,7 @@ fn test_a_backwards_clock_is_refused_and_the_relaxed_form_carries_on() [io]
     test.case("an earlier millisecond is refused, naming both")
     match ulidseq.next(s, 1469918176384, 0, 0)
         Ok(_)  => test.assert(false)
-        Err(f) => test.assert(uliderr.is_text_fault(f) == false)
+        Err(f) => test.assert(not uliderr.is_text_fault(f))
 
     test.case("the relaxed form holds the last millisecond and increments")
     match ulidseq.next_relaxed(s, 1469918176384, 0, 0)
@@ -300,4 +298,4 @@ fn test_an_empty_sequence_says_so() [io]
     test.assert(ulid.is_nil(ulidseq.last(s)))
 
     test.case("a resuming sequence is not empty")
-    test.assert(ulidseq.is_empty(ulidseq.resuming(ulid.max())) == false)
+    test.assert(not ulidseq.is_empty(ulidseq.resuming(ulid.max())))

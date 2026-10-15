@@ -1,7 +1,5 @@
 // ulidseq.nv — monotonicity, as a value the caller threads.
 //
-// Every body here is a `todo()`; the signatures are the design.
-//
 // WHAT MONOTONICITY IS FOR.  A ULID's timestamp is a millisecond, and a
 // program that mints two identifiers in the same millisecond gets two
 // values whose order is the order of their ENTROPY — which is to say,
@@ -66,7 +64,10 @@ pub struct UlidSeq
 // ```
 pub @tier(embedded)
 fn empty() -> UlidSeq []
-    todo("ulid-nv.ulidseq.empty")
+    // `UlidSeq` is boxed like `Ulid`, so building one is a heap cell
+    // and `system` is where a device says it means to build one.
+    system
+        UlidSeq { last_ms: -1, last_hi16: 0, last_lo64: 0 }
 
 // A sequence resuming from an identifier already issued.
 //
@@ -83,7 +84,10 @@ fn empty() -> UlidSeq []
 // ```
 pub @tier(embedded)
 fn resuming(u: Ulid) -> UlidSeq []
-    todo("ulid-nv.ulidseq.resuming")
+    system
+        UlidSeq { last_ms: ulid.timestamp_ms(u),
+                  last_hi16: ulid.random_hi16(u),
+                  last_lo64: ulid.random_lo64(u) }
 
 // The millisecond of the last identifier issued, or `-1`.
 //
@@ -95,7 +99,7 @@ fn resuming(u: Ulid) -> UlidSeq []
 // ```
 pub @tier(embedded)
 fn issued_ms(s: UlidSeq) -> Int []
-    todo("ulid-nv.ulidseq.issued_ms")
+    s.last_ms
 
 // The last identifier issued, or `ulid.nil()` before the first one.
 //
@@ -109,7 +113,9 @@ fn issued_ms(s: UlidSeq) -> Int []
 // ```
 pub @tier(embedded)
 fn last(s: UlidSeq) -> Ulid []
-    todo("ulid-nv.ulidseq.last")
+    if s.last_ms < 0
+        return ulid.nil()
+    ulid.of_parts(s.last_ms, s.last_hi16, s.last_lo64)
 
 // True when this sequence has issued nothing yet.
 //
@@ -122,7 +128,39 @@ fn last(s: UlidSeq) -> Ulid []
 // ```
 pub @tier(embedded)
 fn is_empty(s: UlidSeq) -> Bool []
-    todo("ulid-nv.ulidseq.is_empty")
+    s.last_ms < 0
+
+// The sequence and the identifier for a millisecond that took the
+// entropy offered.
+fn issued(unix_ms: Int, random_hi16: Int, random_lo64: Int) -> (UlidSeq, Ulid)
+    let u = ulid.of_parts(unix_ms, random_hi16, random_lo64)
+    // Read back rather than kept: `of_parts` is what masks the halves
+    // to their widths, so what the sequence remembers is what the
+    // identifier it answered actually carries.
+    //
+    // The struct literal and the tuple are both heap cells at this
+    // tier, so the device build wants them inside a `system` block —
+    // the shape the constructors in `ulid` use.
+    system
+        let s = UlidSeq { last_ms: unix_ms, last_hi16: ulid.random_hi16(u),
+                          last_lo64: ulid.random_lo64(u) }
+        (s, u)
+
+// The next identifier inside a millisecond this sequence already issued
+// in: the previous eighty random bits plus one, with the carry between
+// the halves, or `UlidMonotonicExhausted`.
+fn step(s: UlidSeq) -> Result<(UlidSeq, Ulid), uliderr.UlidFault> []
+    if s.last_lo64 != -1
+        // `int.wrapping_add` and not `+`: the low half is the whole
+        // 64-bit pattern, so increments pass through `Int.max`, where
+        // an ordinary add would trap.
+        system
+            return Ok(issued(s.last_ms, s.last_hi16, int.wrapping_add(s.last_lo64, 1)))
+    if s.last_hi16 == 0xffff
+        system
+            return Err(uliderr.UlidMonotonicExhausted(s.last_ms))
+    system
+        return Ok(issued(s.last_ms, s.last_hi16 + 1, 0))
 
 // THE ONE FUNCTION: the next identifier, and the sequence that
 // remembers it.
@@ -149,7 +187,16 @@ fn is_empty(s: UlidSeq) -> Bool []
 // ```
 pub fn next(s: UlidSeq, unix_ms: Int, random_hi16: Int,
             random_lo64: Int) -> Result<(UlidSeq, Ulid), uliderr.UlidFault> []
-    todo("ulid-nv.ulidseq.next")
+    if not ulid.timestamp_fits(unix_ms)
+        system
+            return Err(uliderr.UlidTimestampOverflow(unix_ms))
+    if unix_ms < s.last_ms
+        system
+            return Err(uliderr.UlidClockWentBackwards(s.last_ms, unix_ms))
+    if unix_ms == s.last_ms
+        return step(s)
+    system
+        return Ok(issued(unix_ms, random_hi16, random_lo64))
 
 // The same, carrying on through a clock that went backwards by holding
 // the last millisecond and incrementing.
@@ -175,7 +222,16 @@ pub fn next(s: UlidSeq, unix_ms: Int, random_hi16: Int,
 // ```
 pub fn next_relaxed(s: UlidSeq, unix_ms: Int, random_hi16: Int,
                     random_lo64: Int) -> Result<(UlidSeq, Ulid), uliderr.UlidFault> []
-    todo("ulid-nv.ulidseq.next_relaxed")
+    if not ulid.timestamp_fits(unix_ms)
+        system
+            return Err(uliderr.UlidTimestampOverflow(unix_ms))
+    if unix_ms > s.last_ms
+        system
+            return Ok(issued(unix_ms, random_hi16, random_lo64))
+    // The same millisecond or an earlier one: either way the sequence
+    // holds the last millisecond and increments, which is the trade
+    // this function's name makes visible.
+    step(s)
 
 // How many identifiers this sequence could still issue in its current
 // millisecond.
@@ -195,7 +251,12 @@ pub fn next_relaxed(s: UlidSeq, unix_ms: Int, random_hi16: Int,
 // ```
 pub @tier(embedded)
 fn remaining_in_ms(s: UlidSeq) -> (Int, Int) []
-    todo("ulid-nv.ulidseq.remaining_in_ms")
+    // A tuple is a heap cell too, so this is a `system` block like the
+    // two constructors above.  Each half is exact on its own, so no
+    // borrow has to cross: the carry between them is a separate one
+    // and `step` is the only place it happens.
+    system
+        (0xffff - s.last_hi16, -1 - s.last_lo64)
 
 // The identifier `next` WOULD answer for this millisecond and entropy,
 // without advancing the sequence.
@@ -215,4 +276,11 @@ fn remaining_in_ms(s: UlidSeq) -> (Int, Int) []
 // ```
 pub fn peek(s: UlidSeq, unix_ms: Int, random_hi16: Int,
             random_lo64: Int) -> Result<Ulid, uliderr.UlidFault> []
-    todo("ulid-nv.ulidseq.peek")
+    // The arms construct a `Result`, which is a heap cell at this tier,
+    // so the match sits in one `system` block and the answer leaves
+    // through `return` — the shape hci-codec-nv's `wrap_cmd` uses.
+    system
+        let answer: Result<Ulid, uliderr.UlidFault> = match next(s, unix_ms, random_hi16, random_lo64)
+            Ok((_, u)) => Ok(u)
+            Err(f)     => Err(f)
+        return answer

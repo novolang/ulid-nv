@@ -1,7 +1,5 @@
 // ulidcvt_tests.nv — the UUID bridge, and the six bits it costs.
 //
-// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
-// assertion here reaches `not implemented: ulid-nv.<module>.<fn>`.
 //
 // THE ASSERTION THIS FILE EXISTS FOR is that the two conversions are
 // NOT the same function: one is lossless and one is not, and the one
@@ -49,7 +47,7 @@ fn test_a_raw_ulid_is_not_a_conforming_uuid_of_any_version() [io]
     test.assert(ulidcvt.uuid_version(ulidcvt.to_uuid_bytes(u)) != 7)
 
     test.case("so its timestamp is not something a UUID reader should trust")
-    test.assert(ulidcvt.timestamp_is_meaningful(ulidcvt.to_uuid_bytes(u)) == false)
+    test.assert(not ulidcvt.timestamp_is_meaningful(ulidcvt.to_uuid_bytes(u)))
 
 @test
 fn test_the_v7_conversion_stamps_the_six_bits_and_says_it_did() [io]
@@ -69,18 +67,18 @@ fn test_the_v7_conversion_stamps_the_six_bits_and_says_it_did() [io]
 
     test.case("but the IDENTITY does not — six bits were overwritten")
     match ulidcvt.of_uuidv7_bytes(v7)
-        Ok(back) => test.assert(ulid.eq(back, u) == false)
+        Ok(back) => test.assert(not ulid.eq(back, u))
         Err(_)   => test.assert(false)
 
     test.case("and is_lossless said so beforehand")
-    test.assert(ulidcvt.is_lossless(u) == false)
+    test.assert(not ulidcvt.is_lossless(u))
 
 @test
 fn test_one_ulid_in_sixty_four_survives_the_v7_stamp_unchanged() [io]
     // The predicate is arithmetic, not a guess: a migration can count
     // how many of its identifiers are unaffected.
     test.case("the nil ULID's six bits are zero, so it is NOT lossless")
-    test.assert(ulidcvt.is_lossless(ulid.nil()) == false)
+    test.assert(not ulidcvt.is_lossless(ulid.nil()))
 
     test.case("a ULID whose six bits already hold 7 and binary 10 is")
     let ready = ulid.of_halves(0x0192F1B2C3D47000, 0x8000000000000001)

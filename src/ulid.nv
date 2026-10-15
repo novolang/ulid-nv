@@ -1,8 +1,6 @@
 // ulid.nv — the value: 128 bits as two integers, and every accessor a
 // shift and a mask.
 //
-// Every body here is a `todo()`; the signatures are the design.
-//
 // THE LAYOUT, MOST SIGNIFICANT BIT FIRST:
 //
 //     ┌───────────────────────────┬──────────────────────────────┐
@@ -39,6 +37,7 @@
 // buffer or onto a UART calls it sixteen times and allocates nothing —
 // and `ulidtext.char_at` is the same idea for the text form.
 
+use std.bytes
 use uliderr
 
 // A ULID: 128 bits, as the two halves of its big-endian layout.
@@ -63,7 +62,7 @@ pub struct Ulid
 // ```
 pub @tier(embedded)
 fn byte_len() -> Int []
-    todo("ulid-nv.ulid.byte_len")
+    16
 
 // How many bits the timestamp occupies: 48.
 //
@@ -75,7 +74,7 @@ fn byte_len() -> Int []
 // ```
 pub @tier(embedded)
 fn timestamp_bits() -> Int []
-    todo("ulid-nv.ulid.timestamp_bits")
+    48
 
 // How many bits the randomness occupies: 80.
 //
@@ -87,7 +86,7 @@ fn timestamp_bits() -> Int []
 // ```
 pub @tier(embedded)
 fn random_bits() -> Int []
-    todo("ulid-nv.ulid.random_bits")
+    80
 
 // The largest millisecond a ULID can carry: 2^48 - 1, which is
 // 281474976710655, which is 10889-08-02.
@@ -104,7 +103,7 @@ fn random_bits() -> Int []
 // ```
 pub @tier(embedded)
 fn max_timestamp_ms() -> Int []
-    todo("ulid-nv.ulid.max_timestamp_ms")
+    0xffffffffffff
 
 // True when a millisecond fits in 48 bits, and is not negative.
 //
@@ -117,7 +116,7 @@ fn max_timestamp_ms() -> Int []
 // ```
 pub @tier(embedded)
 fn timestamp_fits(unix_ms: Int) -> Bool []
-    todo("ulid-nv.ulid.timestamp_fits")
+    unix_ms >= 0 and unix_ms <= max_timestamp_ms()
 
 // The all-zero ULID: timestamp 0, randomness 0.
 //
@@ -135,7 +134,12 @@ fn timestamp_fits(unix_ms: Int) -> Bool []
 // ```
 pub @tier(embedded)
 fn nil() -> Ulid []
-    todo("ulid-nv.ulid.nil")
+    // `Ulid` is boxed — SPEC § 14.5 keeps a `@value` struct out of a
+    // `Result`, an optional and a tuple — so building one is a heap
+    // cell even though the value is two integers.  `system` is where a
+    // device says it means to build one.
+    system
+        Ulid { hi: 0, lo: 0 }
 
 // The all-ones ULID.
 //
@@ -151,7 +155,8 @@ fn nil() -> Ulid []
 // ```
 pub @tier(embedded)
 fn max() -> Ulid []
-    todo("ulid-nv.ulid.max")
+    system
+        Ulid { hi: -1, lo: -1 }
 
 // A ULID from its two halves, exactly as they are.
 //
@@ -168,7 +173,8 @@ fn max() -> Ulid []
 // ```
 pub @tier(embedded)
 fn of_halves(hi: Int, lo: Int) -> Ulid []
-    todo("ulid-nv.ulid.of_halves")
+    system
+        Ulid { hi: hi, lo: lo }
 
 // A ULID from a millisecond and eighty random bits, the top sixteen
 // and the low sixty-four given separately.
@@ -189,7 +195,12 @@ fn of_halves(hi: Int, lo: Int) -> Ulid []
 // ```
 pub @tier(embedded)
 fn of_parts(unix_ms: Int, random_hi16: Int, random_lo64: Int) -> Ulid []
-    todo("ulid-nv.ulid.of_parts")
+    system
+        // The mask is what makes this the non-refusing form: a
+        // millisecond above the ceiling keeps its low 48 bits and
+        // nothing else.
+        let stamp = (unix_ms & max_timestamp_ms()) << 16
+        Ulid { hi: stamp | (random_hi16 & 0xffff), lo: random_lo64 }
 
 // The same, refusing a timestamp that does not fit in 48 bits.
 //
@@ -207,7 +218,15 @@ fn of_parts(unix_ms: Int, random_hi16: Int, random_lo64: Int) -> Ulid []
 // ```
 pub fn of_parts_checked(unix_ms: Int, random_hi16: Int,
                         random_lo64: Int) -> Result<Ulid, uliderr.UlidFault> []
-    todo("ulid-nv.ulid.of_parts_checked")
+    if not timestamp_fits(unix_ms)
+        // A `Result` carrying a payload is a heap cell at this tier, so
+        // the device build wants the construction inside a `system`
+        // block — and delivered with `return`, because a block whose
+        // own value is a `Result` is refused at a device boundary.
+        system
+            return Err(uliderr.UlidTimestampOverflow(unix_ms))
+    system
+        return Ok(of_parts(unix_ms, random_hi16, random_lo64))
 
 // The high half: bits 127..64.
 //
@@ -219,7 +238,7 @@ pub fn of_parts_checked(unix_ms: Int, random_hi16: Int,
 // ```
 pub @tier(embedded)
 fn hi(u: Ulid) -> Int []
-    todo("ulid-nv.ulid.hi")
+    u.hi
 
 // The low half: bits 63..0.
 //
@@ -231,7 +250,7 @@ fn hi(u: Ulid) -> Int []
 // ```
 pub @tier(embedded)
 fn lo(u: Ulid) -> Int []
-    todo("ulid-nv.ulid.lo")
+    u.lo
 
 // The 48-bit millisecond since the Unix epoch.
 //
@@ -244,7 +263,10 @@ fn lo(u: Ulid) -> Int []
 // ```
 pub @tier(embedded)
 fn timestamp_ms(u: Ulid) -> Int []
-    todo("ulid-nv.ulid.timestamp_ms")
+    // The shift is arithmetic and would drag the sign down from bit 63,
+    // so the mask after it is not decoration: it is what makes the
+    // answer the 48 bits and only the 48 bits.
+    (u.hi >> 16) & max_timestamp_ms()
 
 // The top sixteen of the eighty random bits.
 //
@@ -256,7 +278,7 @@ fn timestamp_ms(u: Ulid) -> Int []
 // ```
 pub @tier(embedded)
 fn random_hi16(u: Ulid) -> Int []
-    todo("ulid-nv.ulid.random_hi16")
+    u.hi & 0xffff
 
 // The low sixty-four of the eighty random bits.
 //
@@ -268,7 +290,7 @@ fn random_hi16(u: Ulid) -> Int []
 // ```
 pub @tier(embedded)
 fn random_lo64(u: Ulid) -> Int []
-    todo("ulid-nv.ulid.random_lo64")
+    u.lo
 
 // The same randomness under a different millisecond.
 //
@@ -285,7 +307,7 @@ fn random_lo64(u: Ulid) -> Int []
 // ```
 pub @tier(embedded)
 fn with_timestamp(u: Ulid, unix_ms: Int) -> Ulid []
-    todo("ulid-nv.ulid.with_timestamp")
+    of_parts(unix_ms, u.hi & 0xffff, u.lo)
 
 // One byte of the big-endian sixteen, index 0 being the most
 // significant.
@@ -303,7 +325,11 @@ fn with_timestamp(u: Ulid, unix_ms: Int) -> Ulid []
 // ```
 pub @tier(embedded)
 fn byte_at(u: Ulid, index: Int) -> Int []
-    todo("ulid-nv.ulid.byte_at")
+    if index < 0 or index >= byte_len()
+        return 0
+    if index < 8
+        return (u.hi >> (56 - 8 * index)) & 0xff
+    (u.lo >> (120 - 8 * index)) & 0xff
 
 // The sixteen bytes, most significant first.
 //
@@ -319,7 +345,12 @@ fn byte_at(u: Ulid, index: Int) -> Int []
 // ```
 pub @tier(app)
 fn to_bytes(u: Ulid) -> Bytes []
-    todo("ulid-nv.ulid.to_bytes")
+    // `byte_at`'s loop, written once for a host.  One allocation, for
+    // the buffer.
+    var out = bytes.zeros(byte_len())
+    for i in 0..byte_len()
+        bytes.set_u8(out, i, byte_at(u, i))
+    out
 
 // A ULID from sixteen big-endian bytes, or `None` when there are not
 // exactly sixteen.
@@ -334,7 +365,37 @@ fn to_bytes(u: Ulid) -> Bytes []
 // ```
 pub @tier(app)
 fn of_bytes(b: Bytes) -> ?Ulid []
-    todo("ulid-nv.ulid.of_bytes")
+    if bytes.len(b) != byte_len()
+        return None
+    // Both reads are in range, because the length was just checked.
+    let hi = bytes.u64_be_at(b, 0) ?? 0
+    let lo = bytes.u64_be_at(b, 8) ?? 0
+    Some(of_halves(hi, lo))
+
+// One half of the unsigned comparison `cmp` is: `-1`, `0` or `1`.
+//
+// A half is a signed `Int` carrying an unsigned number, so the top bit
+// set means above 2^63 and not below zero.  Spelled out here rather than
+// inline in `cmp` because it is asked twice, once for each half.
+@tier(embedded)
+fn cmp_unsigned(x: Int, y: Int) -> Int []
+    // Equal is the only case the two comparisons agree on and the only
+    // one that needs saying first.
+    if x == y
+        return 0
+    // A negative half is an unsigned half above 2^63, so it is above
+    // every non-negative one and below the other negatives.
+    if x < 0
+        if y < 0
+            if x < y
+                return -1
+            return 1
+        return 1
+    if y < 0
+        return -1
+    if x < y
+        return -1
+    1
 
 // Compare two ULIDs as UNSIGNED 128-bit integers: `-1`, `0` or `1`.
 //
@@ -352,7 +413,10 @@ fn of_bytes(b: Bytes) -> ?Ulid []
 // ```
 pub @tier(embedded)
 fn cmp(a: Ulid, b: Ulid) -> Int []
-    todo("ulid-nv.ulid.cmp")
+    let by_hi = cmp_unsigned(a.hi, b.hi)
+    if by_hi != 0
+        return by_hi
+    cmp_unsigned(a.lo, b.lo)
 
 // True when two ULIDs are the same 128 bits.
 //
@@ -365,7 +429,7 @@ fn cmp(a: Ulid, b: Ulid) -> Int []
 // ```
 pub @tier(embedded)
 fn eq(a: Ulid, b: Ulid) -> Bool []
-    todo("ulid-nv.ulid.eq")
+    a.hi == b.hi and a.lo == b.lo
 
 // True when every one of the 128 bits is zero.
 //
@@ -382,7 +446,7 @@ fn eq(a: Ulid, b: Ulid) -> Bool []
 // ```
 pub @tier(embedded)
 fn is_nil(u: Ulid) -> Bool []
-    todo("ulid-nv.ulid.is_nil")
+    u.hi == 0 and u.lo == 0
 
 // The smallest ULID with this millisecond: the timestamp, then eighty
 // zero bits.
@@ -402,7 +466,7 @@ fn is_nil(u: Ulid) -> Bool []
 // ```
 pub @tier(embedded)
 fn floor_of(unix_ms: Int) -> Ulid []
-    todo("ulid-nv.ulid.floor_of")
+    of_parts(unix_ms, 0, 0)
 
 // The largest ULID with this millisecond: the timestamp, then eighty
 // one bits.
@@ -419,4 +483,4 @@ fn floor_of(unix_ms: Int) -> Ulid []
 // ```
 pub @tier(embedded)
 fn ceiling_of(unix_ms: Int) -> Ulid []
-    todo("ulid-nv.ulid.ceiling_of")
+    of_parts(unix_ms, 0xffff, -1)

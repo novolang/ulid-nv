@@ -1,13 +1,10 @@
 // ulidtext_tests.nv — Crockford base32, with the specification's own
 // vectors and the three rules people skip.
 //
-// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
-// assertion here reaches `not implemented: ulid-nv.<module>.<fn>`.
-// That is the expected result until the bodies land.
 //
 // THE VECTOR EVERY ULID IMPLEMENTATION USES is
 // `01ARZ3NDEKTSV4RRFFQ69G5FAV`, which is the specification's own
-// example.  Its timestamp is 1469918176385 — 2016-07-30T23:36:16.385Z —
+// example.  Its timestamp is 1469922850259 — 2016-07-30T23:54:10.259Z —
 // and its randomness is what the rest of the characters carry.  Every
 // port that claims to be a port is checked against that string, and so
 // is this one.
@@ -24,8 +21,8 @@ fn test_the_specifications_own_vector() [io]
     match ulidtext.parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")
         Err(_) => test.assert(false)
         Ok(u)  =>
-            test.case("the timestamp is 2016-07-30T23:36:16.385Z")
-            test.assert(ulid.timestamp_ms(u) == 1469918176385)
+            test.case("the timestamp is 2016-07-30T23:54:10.259Z")
+            test.assert(ulid.timestamp_ms(u) == 1469922850259)
 
             test.case("and it round-trips to exactly the same 26 characters")
             test.assert(ulidtext.encode(u) == "01ARZ3NDEKTSV4RRFFQ69G5FAV")
@@ -122,7 +119,7 @@ fn test_a_wrong_length_says_what_it_found() [io]
         Err(_) => test.assert(true)
 
     test.case("empty")
-    test.assert(ulidtext.is_valid("") == false)
+    test.assert(not ulidtext.is_valid(""))
 
     test.case("and the free-function form of the message says the same thing")
     match ulidtext.parse("")
@@ -194,7 +191,7 @@ fn test_writing_into_a_callers_buffer() [io]
 fn test_parse_or_none_is_the_same_decision_without_the_reason() [io]
     test.case("a good one")
     match ulidtext.parse_or_none("01ARZ3NDEKTSV4RRFFQ69G5FAV")
-        Some(u) => test.assert(ulid.timestamp_ms(u) == 1469918176385)
+        Some(u) => test.assert(ulid.timestamp_ms(u) == 1469922850259)
         None    => test.assert(false)
 
     test.case("a bad one")

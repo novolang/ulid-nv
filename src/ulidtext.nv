@@ -1,8 +1,6 @@
 // ulidtext.nv — THE LOAD-BEARING INTERFACE: the text form is a
 // FUNCTION FROM AN INDEX TO A CHARACTER.
 //
-// Every body here is a `todo()`; the signatures are the design.
-//
 // Every other ULID library's encoder is `fn encode(u) -> String`: it
 // allocates twenty-six bytes, fills them, and hands them over.  That
 // function is here too, and it is `to_str`'s convenience.  But it is
@@ -49,6 +47,7 @@
 //      the same value — two distinct primary keys that are equal.
 //      `parse` answers `UlidTextOverflow` and names the character.
 
+use std.bytes
 use ulid
 use uliderr
 
@@ -62,7 +61,7 @@ use uliderr
 // ```
 pub @tier(embedded)
 fn text_len() -> Int []
-    todo("ulid-nv.ulidtext.text_len")
+    26
 
 // How many of those characters carry the timestamp: 10.
 //
@@ -79,7 +78,7 @@ fn text_len() -> Int []
 // ```
 pub @tier(embedded)
 fn timestamp_len() -> Int []
-    todo("ulid-nv.ulidtext.timestamp_len")
+    10
 
 // Crockford's alphabet, in value order.
 //
@@ -96,7 +95,7 @@ fn timestamp_len() -> Int []
 // ```
 pub @tier(app)
 fn alphabet() -> Str []
-    todo("ulid-nv.ulidtext.alphabet")
+    "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 // The byte code of the digit whose value is `v`, for `v` in 0..31.
 //
@@ -111,7 +110,24 @@ fn alphabet() -> Str []
 // ```
 pub @tier(embedded)
 fn digit_byte(v: Int) -> Int []
-    todo("ulid-nv.ulidtext.digit_byte")
+    if v < 0 or v > 31
+        return 0
+    if v < 10
+        return '0' + v
+    // Past the digits the alphabet is not contiguous with the value:
+    // I, L, O and U are missing, so a value above 9 has to walk over
+    // the gaps.  Four steps, one per excluded letter, in the order the
+    // letters appear.
+    var m = v - 10
+    if m >= 8
+        m = m + 1
+    if m >= 11
+        m = m + 1
+    if m >= 14
+        m = m + 1
+    if m >= 20
+        m = m + 1
+    'A' + m
 
 // The value of a digit's byte code, applying every ambiguity rule, or
 // `-1` when the byte is not a digit.
@@ -128,7 +144,37 @@ fn digit_byte(v: Int) -> Int []
 // ```
 pub @tier(embedded)
 fn digit_value(byte: Int) -> Int []
-    todo("ulid-nv.ulidtext.digit_value")
+    // Case is not a distinction: a ULID is read off a screen and typed
+    // back in, in whatever case the typer's hands were in.
+    var b = byte
+    if b >= 'a' and b <= 'z'
+        b = b - 32
+    if b >= '0' and b <= '9'
+        return b - '0'
+    if b < 'A' or b > 'Z'
+        return -1
+    // The ambiguity rules, before the alphabet arithmetic: I and L mean
+    // 1, O means 0 — and U is not a digit at all, because the whole
+    // point of excluding it is that it must not appear.
+    if b == 'I' or b == 'L'
+        return 1
+    if b == 'O'
+        return 0
+    if b == 'U'
+        return -1
+    // How many of the four excluded letters sit behind this one.  Their
+    // values are 8, 11, 14 and 20 in the alphabet, so the letter's
+    // value is ten past its number with that many gaps taken out.
+    var gaps = 0
+    if b > 'I'
+        gaps = gaps + 1
+    if b > 'L'
+        gaps = gaps + 1
+    if b > 'O'
+        gaps = gaps + 1
+    if b > 'U'
+        gaps = gaps + 1
+    10 + (b - 'A' - gaps)
 
 // THE PRIMITIVE: the byte code of character `index` of this ULID's
 // 26-character form, index 0 being the most significant.
@@ -147,7 +193,19 @@ fn digit_value(byte: Int) -> Int []
 // ```
 pub @tier(embedded)
 fn char_at(u: Ulid, index: Int) -> Int []
-    todo("ulid-nv.ulidtext.char_at")
+    if index < 0 or index >= text_len()
+        return 0
+    // The first character is the top THREE bits, not five: the two
+    // hundred and ninetieth bit of the padded 130 is always zero.
+    if index == 0
+        return digit_byte((ulid.hi(u) >> 61) & 7)
+    if index < 13
+        return digit_byte((ulid.hi(u) >> (61 - 5 * index)) & 31)
+    // The thirteenth character straddles the halves: one bit left at
+    // the bottom of `hi`, four at the top of `lo`.
+    if index == 13
+        return digit_byte(((ulid.hi(u) & 1) << 4) | ((ulid.lo(u) >> 60) & 15))
+    digit_byte((ulid.lo(u) >> (125 - 5 * index)) & 31)
 
 // The 26-character text form.
 //
@@ -164,16 +222,24 @@ fn char_at(u: Ulid, index: Int) -> Int []
 // ```
 pub @tier(app)
 fn encode(u: Ulid) -> Str []
-    todo("ulid-nv.ulidtext.encode")
+    // `char_at`'s loop, written once for a caller that has an
+    // allocator.  One allocation, for the buffer.
+    var out = bytes.zeros(text_len())
+    for i in 0..text_len()
+        bytes.set_u8(out, i, char_at(u, i))
+    bytes.to_str(out)
 
-// The 26 characters written into a caller's buffer at an offset, with
-// the buffer and the next offset answered.
+// The 26 characters assembled at an offset, with the buffer and the
+// next offset answered.
 //
 // For a caller assembling a record: a log line, a fixed-width column,
-// a packet.  The buffer must already have room for 26 bytes at `at`;
-// when it does not, the buffer is answered unchanged and the offset
-// answered is `at`, so a caller comparing the two sees that nothing
-// was written.
+// a packet.  The buffer that comes back has the characters in it from
+// `at` on; the buffer that went in is not written (the parameter is
+// not `var`), so a caller threads the answer rather than keeping the
+// argument.  The buffer must already have room for 26 bytes at `at`;
+// when it does not, the buffer comes back with nothing written and the
+// offset answered is `at`, so a caller comparing the two sees that
+// nothing was written.
 //
 // ```novo
 // use ulid
@@ -187,7 +253,20 @@ fn encode(u: Ulid) -> Str []
 // ```
 pub @tier(app)
 fn encode_into(u: Ulid, out: Bytes, at: Int) -> (Bytes, Int) []
-    todo("ulid-nv.ulidtext.encode_into")
+    // The characters go into a copy rather than into `out`: `out` is
+    // not a `var` parameter, so a frozen signature cannot write through
+    // it or even hand it back plain.  One allocation per call; see the
+    // CHANGELOG's `### Known`.
+    //
+    // Filed as `language/a-frozen-into-signature-cannot-fill-its-buffer`
+    // (E2036 / E2038).  Put back when it closes: write through `out`
+    // and answer `(out, at + text_len())`.
+    var buf = bytes.clone(out)
+    if at < 0 or at > bytes.len(buf) - text_len()
+        return (buf, at)
+    for i in 0..text_len()
+        bytes.set_u8(buf, at + i, char_at(u, i))
+    (buf, at + text_len())
 
 // Only the first ten characters: the timestamp's prefix.
 //
@@ -203,7 +282,10 @@ fn encode_into(u: Ulid, out: Bytes, at: Int) -> (Bytes, Int) []
 // ```
 pub @tier(app)
 fn encode_timestamp(u: Ulid) -> Str []
-    todo("ulid-nv.ulidtext.encode_timestamp")
+    var out = bytes.zeros(timestamp_len())
+    for i in 0..timestamp_len()
+        bytes.set_u8(out, i, char_at(u, i))
+    bytes.to_str(out)
 
 // Parse 26 characters into a ULID, applying every ambiguity rule and
 // refusing the three failures by name.
@@ -222,7 +304,27 @@ fn encode_timestamp(u: Ulid) -> Str []
 // ```
 pub @tier(app)
 fn parse(text: Str) -> Result<Ulid, uliderr.UlidFault> []
-    todo("ulid-nv.ulidtext.parse")
+    let n = str.len(text)
+    if n != text_len()
+        return Err(uliderr.UlidBadLength(n))
+    var hi = 0
+    var lo = 0
+    for i in 0..text_len()
+        let byte = str.byte_at_or(text, i, 0)
+        let v = digit_value(byte)
+        if v < 0
+            return Err(uliderr.UlidBadDigit(i, byte))
+        // Rule 3: twenty-six digits are 130 bits and this is 128, so
+        // the top two bits of the first digit are padding and anything
+        // but zero there names a value the format does not have.
+        if i == 0 and v > 7
+            return Err(uliderr.UlidTextOverflow(byte))
+        // Five bits further up.  The carry between the halves is the
+        // five bits that leave the top of `lo`.
+        let carry = lo >>> 59
+        lo = (lo << 5) | v
+        hi = (hi << 5) | carry
+    Ok(ulid.of_halves(hi, lo))
 
 // Parse, answering `None` rather than a reason.
 //
@@ -239,7 +341,9 @@ fn parse(text: Str) -> Result<Ulid, uliderr.UlidFault> []
 // ```
 pub @tier(app)
 fn parse_or_none(text: Str) -> ?Ulid []
-    todo("ulid-nv.ulidtext.parse_or_none")
+    match parse(text)
+        Ok(u)  => Some(u)
+        Err(_) => None
 
 // True when the text is 26 characters that would parse.
 //
@@ -255,7 +359,9 @@ fn parse_or_none(text: Str) -> ?Ulid []
 // ```
 pub @tier(app)
 fn is_valid(text: Str) -> Bool []
-    todo("ulid-nv.ulidtext.is_valid")
+    match parse(text)
+        Ok(_)  => true
+        Err(_) => false
 
 // The canonical spelling of a text that parses: upper case, with every
 // alias resolved.
@@ -276,7 +382,21 @@ fn is_valid(text: Str) -> Bool []
 // ```
 pub @tier(app)
 fn canonical(text: Str) -> Result<Str, uliderr.UlidFault> []
-    todo("ulid-nv.ulidtext.canonical")
+    match parse(text)
+        Ok(u)  => Ok(encode(u))
+        Err(f) => Err(f)
+
+// One character in the form the comparison is over: upper case with
+// every alias resolved.
+//
+// A byte that is not a digit at all is left alone, so two texts with
+// the same garbage in the same place compare equal there rather than
+// being made up.
+fn canonical_byte(byte: Int) -> Int
+    let v = digit_value(byte)
+    if v < 0
+        return byte
+    digit_byte(v)
 
 // Compare two texts the way the bits compare, without parsing either.
 //
@@ -297,4 +417,21 @@ fn canonical(text: Str) -> Result<Str, uliderr.UlidFault> []
 // ```
 pub @tier(app)
 fn compare_text(a: Str, b: Str) -> Int []
-    todo("ulid-nv.ulidtext.compare_text")
+    var n = str.len(a)
+    if str.len(b) < n
+        n = str.len(b)
+    // Not a parse and not a `Str` comparison: this is the property the
+    // format exists for, so it is spelled as the byte comparison a
+    // database's index would do.
+    for i in 0..n
+        let ca = canonical_byte(str.byte_at_or(a, i, 0))
+        let cb = canonical_byte(str.byte_at_or(b, i, 0))
+        if ca < cb
+            return -1
+        if ca > cb
+            return 1
+    if str.len(a) < str.len(b)
+        return -1
+    if str.len(a) > str.len(b)
+        return 1
+    0

@@ -1,0 +1,247 @@
+// ulid_edge_tests.nv — the boundaries the three oracle suites leave.
+//
+// The oracle suites are the specification and they walk the ordinary
+// path of every module.  This file is the supplement: the off-by-one
+// ends of the two digit tables, the refusal arms whose reason a caller
+// has to be able to read, the comparison's negative-half and
+// different-length endings, and the one `ulidgen` failure that comes
+// from a sequence being ahead of the clock.  Nothing here pins a rule
+// the oracle does not state; each case names the arm it reaches.
+
+use std.test
+use std.str
+use std.bytes
+use ulid
+use ulidseq
+use ulidtext
+use ulidcvt
+use ulidgen
+use uliderr
+
+@test
+fn test_every_fault_has_a_sentence_naming_its_position() [io]
+    // Every variant carries where it went wrong, and the sentence is
+    // what a caller that only logs gets.  The five variants the oracle
+    // suites never print are here.
+    test.case("a wrong length names the length it found")
+    let short = UlidBadLength(25)
+    let short_sentence = short.message()
+    test.assert(str.contains(short_sentence, "25"))
+
+    test.case("a bad digit names the index and the byte")
+    let digit = UlidBadDigit(4, 85)
+    let digit_sentence = digit.message()
+    test.assert(str.contains(digit_sentence, "4"))
+    test.assert(str.contains(digit_sentence, "85"))
+
+    test.case("a text overflow names the first character")
+    let over = UlidTextOverflow(56)
+    let over_sentence = over.message()
+    test.assert(str.contains(over_sentence, "56"))
+
+    test.case("a timestamp overflow names the millisecond")
+    let stamp = UlidTimestampOverflow(281474976710656)
+    let stamp_sentence = stamp.message()
+    test.assert(str.contains(stamp_sentence, "281474976710656"))
+
+    test.case("exhaustion names the millisecond that ran out")
+    let spent = UlidMonotonicExhausted(1469918176385)
+    let spent_sentence = spent.message()
+    test.assert(str.contains(spent_sentence, "1469918176385"))
+
+    test.case("and a backwards clock names both milliseconds")
+    let back = UlidClockWentBackwards(1469918176386, 1469918176385)
+    let back_sentence = back.message()
+    test.assert(str.contains(back_sentence, "1469918176386"))
+    test.assert(str.contains(back_sentence, "1469918176385"))
+
+    test.case("the free function answers the same sentence as the method")
+    let same = UlidBadDigit(4, 85)
+    test.assert(uliderr.fault_message(same) == digit_sentence)
+
+@test
+fn test_index_of_and_is_text_fault_split_the_two_kinds() [io]
+    test.case("a bad digit's index is the character to underline")
+    let digit = UlidBadDigit(4, 85)
+    test.assert(uliderr.index_of(digit) == 4)
+
+    test.case("an overflow is about the first character")
+    let over = UlidTextOverflow(56)
+    test.assert(uliderr.index_of(over) == 0)
+
+    test.case("a fault with no character in it answers -1")
+    let short = UlidBadLength(25)
+    test.assert(uliderr.index_of(short) == 0 - 1)
+    let back = UlidClockWentBackwards(2, 1)
+    test.assert(uliderr.index_of(back) == 0 - 1)
+
+    test.case("the three text faults are the text faults")
+    test.assert(uliderr.is_text_fault(short))
+    test.assert(uliderr.is_text_fault(digit))
+    test.assert(uliderr.is_text_fault(over))
+
+    test.case("and a fault about time is not one")
+    let stamp = UlidTimestampOverflow(1)
+    test.assert(not uliderr.is_text_fault(stamp))
+    let spent = UlidMonotonicExhausted(1)
+    test.assert(not uliderr.is_text_fault(spent))
+    test.assert(not uliderr.is_text_fault(back))
+
+@test
+fn test_the_digit_tables_at_their_edges() [io]
+    test.case("digit_byte answers 0 outside 0..31 rather than reading off a table")
+    test.assert(ulidtext.digit_byte(0 - 1) == 0)
+    test.assert(ulidtext.digit_byte(32) == 0)
+
+    test.case("its two ends are 0 and Z, which is the ordering the format needs")
+    test.assert(ulidtext.digit_byte(0) == '0')
+    test.assert(ulidtext.digit_byte(31) == 'Z')
+
+    test.case("digit_value answers -1 for a byte that is not a digit at all")
+    test.assert(ulidtext.digit_value(0) == 0 - 1)
+    test.assert(ulidtext.digit_value(32) == 0 - 1)
+
+    test.case("the ambiguities resolve the way Crockford's page says")
+    test.assert(ulidtext.digit_value('I') == 1)
+    test.assert(ulidtext.digit_value('l') == 1)
+    test.assert(ulidtext.digit_value('O') == 0)
+    test.assert(ulidtext.digit_value('o') == 0)
+
+    test.case("U is excluded, so it is refused in both cases")
+    test.assert(ulidtext.digit_value('U') == 0 - 1)
+    test.assert(ulidtext.digit_value('u') == 0 - 1)
+
+    test.case("and the two tables are inverse at the last value")
+    test.assert(ulidtext.digit_value(ulidtext.digit_byte(31)) == 31)
+
+@test
+fn test_canonical_answers_the_parse_reason_and_not_none() [io]
+    test.case("a text that does not parse comes back with its reason")
+    match ulidtext.canonical("nope")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.is_text_fault(f))
+
+    test.case("a text that parses comes back in the one spelling")
+    match ulidtext.canonical("01arz3ndektsv4rrffq69g5fav")
+        Ok(s)  => test.assert(s == "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        Err(_) => test.assert(false)
+
+@test
+fn test_compare_text_orders_by_alphabet_and_by_length() [io]
+    test.case("a differing character decides it in the alphabet's order")
+    test.assert(ulidtext.compare_text("A", "B") == 0 - 1)
+    test.assert(ulidtext.compare_text("B", "A") == 1)
+    test.assert(ulidtext.compare_text("Z", "0") == 1)
+
+    test.case("an equal prefix falls to the shorter text")
+    test.assert(ulidtext.compare_text("A", "AB") == 0 - 1)
+    test.assert(ulidtext.compare_text("AB", "A") == 1)
+
+    test.case("identical texts are equal")
+    test.assert(ulidtext.compare_text("A", "A") == 0)
+    test.assert(ulidtext.compare_text("", "") == 0)
+
+    test.case("a byte that is not a digit compares as itself")
+    test.assert(ulidtext.compare_text("!!", "!!") == 0)
+    test.assert(ulidtext.compare_text("!", "A") == 0 - 1)
+
+@test
+fn test_the_unsigned_comparison_past_the_sign_bit() [io]
+    // Both halves live in a signed `Int`, so the first bit set means a
+    // number above 2^63 and not a negative one.  The oracle suite pins
+    // `max` against `nil`; these are the two negatives against each
+    // other, which is the arm a signed compare gets backwards.
+    let one = ulid.of_halves(0 - 1, 0)
+    let two = ulid.of_halves(0 - 2, 0)
+    let zero = ulid.of_halves(0, 0)
+
+    test.case("two halves above 2^63 compare by value")
+    test.assert(ulid.cmp(one, two) == 1)
+    test.assert(ulid.cmp(two, one) == 0 - 1)
+
+    test.case("a half above 2^63 outranks a non-negative one")
+    test.assert(ulid.cmp(zero, one) == 0 - 1)
+    test.assert(ulid.cmp(one, zero) == 1)
+
+    test.case("and two non-negative halves compare ordinarily")
+    test.assert(ulid.cmp(ulid.of_halves(1, 0), zero) == 1)
+
+@test
+fn test_a_uuid_buffer_of_the_wrong_size_has_no_version() [io]
+    test.case("uuid_version answers -1 rather than reading past sixteen")
+    test.assert(ulidcvt.uuid_version(bytes.zeros(15)) == 0 - 1)
+    test.assert(ulidcvt.uuid_version(bytes.zeros(17)) == 0 - 1)
+
+    test.case("and a timestamp is meaningful only for a version 7")
+    test.assert(not ulidcvt.timestamp_is_meaningful(bytes.zeros(15)))
+    test.assert(not ulidcvt.timestamp_is_meaningful(bytes.zeros(16)))
+
+@test
+fn test_of_uuid_text_refuses_the_hyphens_that_are_wrong() [io]
+    // Two texts of the same 36 characters differ only in where the
+    // hyphens sit, and both are refusals rather than two spellings of
+    // one value.
+    test.case("a length that is neither 32 nor 36 is named as a length")
+    match ulidcvt.of_uuid_text("0123456789abcdef")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.is_text_fault(f))
+
+    test.case("a hyphen missing at a canonical position names that index")
+    match ulidcvt.of_uuid_text("0192f1b2xc3d4-7000-8000-000000000001")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.index_of(f) == 8)
+
+    test.case("a hyphen where none belongs names its own index")
+    match ulidcvt.of_uuid_text("-192f1b2-c3d4-7000-8000-000000000000")
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(uliderr.index_of(f) == 0)
+
+@test
+fn test_the_sequence_refuses_a_millisecond_that_does_not_fit() [io]
+    let too_big = ulid.max_timestamp_ms() + 1
+
+    test.case("next refuses a millisecond above 2^48 - 1 and names it")
+    match ulidseq.next(ulidseq.empty(), too_big, 0, 0)
+        Ok(_)  => test.assert(false)
+        Err(f) => match f
+            UlidTimestampOverflow(ms) => test.assert(ms == too_big)
+            _                         => test.assert(false)
+
+    test.case("so does the relaxed form, which is otherwise the permissive one")
+    match ulidseq.next_relaxed(ulidseq.empty(), too_big, 0, 0)
+        Ok(_)  => test.assert(false)
+        Err(f) => test.assert(not uliderr.is_text_fault(f))
+
+    test.case("and peek answers the same refusal without advancing")
+    match ulidseq.peek(ulidseq.empty(), too_big, 0, 0)
+        Ok(_)  => test.assert(false)
+        Err(f) => match f
+            UlidTimestampOverflow(_) => test.assert(true)
+            _                        => test.assert(false)
+
+@test
+fn test_next_relaxed_takes_a_later_millisecond_like_next_does() [io]
+    // The relaxed form differs from `next` only in what it does with an
+    // EARLIER millisecond; a later one is the ordinary path and takes
+    // the entropy.
+    test.case("a later millisecond takes the entropy offered")
+    match ulidseq.next_relaxed(ulidseq.empty(), 1700000000000, 0xBEEF, 7)
+        Err(_)     => test.assert(false)
+        Ok((s, u)) =>
+            test.assert(ulid.random_lo64(u) == 7)
+            test.assert(ulid.random_hi16(u) == 0xBEEF)
+            test.assert(ulidseq.issued_ms(s) == 1700000000000)
+
+@test
+fn test_a_batch_ahead_of_the_clock_refuses_rather_than_going_backwards() [io, time, rand]
+    // A sequence resuming from `ulid.max()` carries a millisecond in
+    // the year 10889, so any real clock is behind it.  `batch` reads the
+    // clock once and asks the sequence for its first step, and that step
+    // is `UlidClockWentBackwards` — which the batch answers rather than
+    // minting an identifier below the one it resumed from.
+    let ahead = ulidseq.resuming(ulid.max())
+    match ulidgen.batch(ahead, 1)
+        Ok(_)  => test.assert(false)
+        Err(f) => match f
+            UlidClockWentBackwards(_, _) => test.assert(true)
+            _                            => test.assert(false)

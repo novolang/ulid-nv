@@ -1,7 +1,5 @@
 // ulidgen.nv — the one module in this package that performs anything.
 //
-// Every body here is a `todo()`; the signatures are the design.
-//
 // THIS MODULE IS THE PACKAGE'S ENTIRE `host` SURFACE, and the manifest
 // names it in `host_modules` for exactly that reason.  Two effects and
 // no others: `[time]` for the millisecond and `[rand]` for the eighty
@@ -30,6 +28,7 @@
 // was made, and a monotonic one tells them what the next one will be.
 // An unguessable token is `crypto-nv`'s business.
 
+use std.rand
 use ulid
 use ulidseq
 use uliderr
@@ -51,7 +50,8 @@ use uliderr
 //         Err(f) => println(f.message())
 // ```
 pub fn new() -> Result<Ulid, uliderr.UlidFault> [time, rand]
-    todo("ulid-nv.ulidgen.new")
+    let (hi, lo) = draw_entropy()
+    ulid.of_parts_checked(now_ms(), hi, lo)
 
 // A ULID with the current millisecond and entropy the caller supplies.
 //
@@ -69,7 +69,7 @@ pub fn new() -> Result<Ulid, uliderr.UlidFault> [time, rand]
 //         Err(f) => println(f.message())
 // ```
 pub fn new_with(random_hi16: Int, random_lo64: Int) -> Result<Ulid, uliderr.UlidFault> [time]
-    todo("ulid-nv.ulidgen.new_with")
+    ulid.of_parts_checked(now_ms(), random_hi16, random_lo64)
 
 // The current Unix millisecond, as this package reads it.
 //
@@ -84,7 +84,11 @@ pub fn new_with(random_hi16: Int, random_lo64: Int) -> Result<Ulid, uliderr.Ulid
 //     println("${ulidgen.now_ms()}")
 // ```
 pub fn now_ms() -> Int [time]
-    todo("ulid-nv.ulidgen.now_ms")
+    // The wall clock and not the monotonic one: a ULID's timestamp is
+    // meant to be comparable between machines, and a reading measured
+    // from this process's start is not.
+    let z = Zoned.now(Tz.utc())
+    z.unix_secs() * 1000 + z.nanos() / 1000000
 
 // Eighty fresh random bits, as the top sixteen and the low
 // sixty-four.
@@ -100,7 +104,15 @@ pub fn now_ms() -> Int [time]
 //     println("${hi}")
 // ```
 pub fn draw_entropy() -> (Int, Int) [rand]
-    todo("ulid-nv.ulidgen.draw_entropy")
+    // Five sixteen-bit draws, because `std.rand` has no wider integer:
+    // one for the top sixteen bits and four shifted into the low
+    // sixty-four.
+    let hi16 = rand.int(0x10000)
+    let lo64 = rand.int(0x10000)
+        | (rand.int(0x10000) << 16)
+        | (rand.int(0x10000) << 32)
+        | (rand.int(0x10000) << 48)
+    (hi16, lo64)
 
 // The next identifier in a caller's monotonic sequence, with the clock
 // and the entropy read here.
@@ -123,7 +135,8 @@ pub fn draw_entropy() -> (Int, Int) [rand]
 //         Err(f)     => println(f.message())
 // ```
 pub fn next_in(s: ulidseq.UlidSeq) -> Result<(ulidseq.UlidSeq, Ulid), uliderr.UlidFault> [time, rand]
-    todo("ulid-nv.ulidgen.next_in")
+    let (hi, lo) = draw_entropy()
+    ulidseq.next(s, now_ms(), hi, lo)
 
 // The same, carrying on through a clock that went backwards.
 //
@@ -142,7 +155,8 @@ pub fn next_in(s: ulidseq.UlidSeq) -> Result<(ulidseq.UlidSeq, Ulid), uliderr.Ul
 //         Err(f)     => println(f.message())
 // ```
 pub fn next_in_relaxed(s: ulidseq.UlidSeq) -> Result<(ulidseq.UlidSeq, Ulid), uliderr.UlidFault> [time, rand]
-    todo("ulid-nv.ulidgen.next_in_relaxed")
+    let (hi, lo) = draw_entropy()
+    ulidseq.next_relaxed(s, now_ms(), hi, lo)
 
 // `count` identifiers from one sequence, in issue order, with the
 // clock read ONCE.
@@ -166,4 +180,18 @@ pub fn next_in_relaxed(s: ulidseq.UlidSeq) -> Result<(ulidseq.UlidSeq, Ulid), ul
 // ```
 pub fn batch(s: ulidseq.UlidSeq,
              count: Int) -> Result<(ulidseq.UlidSeq, [Ulid]), uliderr.UlidFault> [time, rand]
-    todo("ulid-nv.ulidgen.batch")
+    // One clock read and one entropy draw for the whole batch: the
+    // identifiers after the first come from the sequence's increment,
+    // which is what makes them sort in issue order.
+    let ms = now_ms()
+    let (hi, lo) = draw_entropy()
+    var seq = s
+    var out: [Ulid] = []
+    for _ in 0..count
+        match ulidseq.next(seq, ms, hi, lo)
+            Err(f)         =>
+                return Err(f)
+            Ok((moved, u)) =>
+                seq = moved
+                list.push(out, u)
+    Ok((seq, out))
